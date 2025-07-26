@@ -8,7 +8,6 @@
 #include <time.h>
 #include <stdarg.h>
 #include <ctype.h>
-// #include <mouse.h> // Removed: Mouse functions are typically declared in ncurses.h
 
 #define EDITOR_VERSION "0.1.0"
 #define TAB_STOP 4
@@ -51,6 +50,7 @@ typedef struct {
     int screen_rows, screen_cols;
     char *filename;
     int dirty;
+    int select_all_active;
 } EditorConfig;
 
 EditorConfig E;
@@ -189,6 +189,7 @@ int get_cx_display();
 void editor_select_syntax_highlight();
 void editor_update_syntax(int filerow);
 int is_separator(int c);
+char *editor_prompt(const char *prompt_fmt, ...); // New prototype for prompt function
 
 void init_editor() {
     E.cx = 0;
@@ -199,6 +200,7 @@ void init_editor() {
     E.col_offset = 0;
     E.filename = NULL;
     E.dirty = 0;
+    E.select_all_active = 0;
 
     initscr();
     raw();
@@ -322,8 +324,13 @@ void editor_read_file(const char *filename) {
 
 void editor_save_file() {
     if (!E.filename) {
-        editor_set_status_message("No filename specified. (Ctrl+S to save)");
-        return;
+        char *new_filename = editor_prompt("Save as: %s (ESC to cancel)", "");
+        if (new_filename == NULL) {
+            editor_set_status_message("Save cancelled.");
+            return;
+        }
+        E.filename = new_filename;
+        editor_select_syntax_highlight(); // Re-evaluate syntax for new extension
     }
 
     FILE *fp = fopen(E.filename, "w");
@@ -346,7 +353,6 @@ void editor_draw_rows() {
         int filerow = y + E.row_offset;
 
         if (filerow >= E.num_lines) {
-            mvprintw(y, 0, "~");
         } else {
             EditorLine *line = &E.lines[filerow];
             int current_color_pair = HL_NORMAL;
@@ -617,6 +623,39 @@ void editor_insert_newline() {
 }
 
 void editor_del_char() {
+    if (E.select_all_active) {
+        if (E.lines) {
+            for (int i = 0; i < E.num_lines; ++i) {
+                free(E.lines[i].text);
+                free(E.lines[i].hl);
+            }
+            free(E.lines);
+        }
+        E.lines = malloc(sizeof(EditorLine));
+        if (E.lines == NULL) {
+            cleanup_editor();
+            fprintf(stderr, "Fatal error: out of memory (clear all).\n");
+            exit(1);
+        }
+        E.lines[0].text = strdup("");
+        if (E.lines[0].text == NULL) {
+            cleanup_editor();
+            fprintf(stderr, "Fatal error: out of memory (clear all text).\n");
+            exit(1);
+        }
+        E.lines[0].len = 0;
+        E.lines[0].hl = NULL;
+        E.lines[0].hl_open_comment = 0;
+        E.num_lines = 1;
+        E.cx = 0;
+        E.cy = 0;
+        E.dirty = 1;
+        E.select_all_active = 0;
+        editor_update_syntax(0);
+        editor_set_status_message("All text deleted.");
+        return;
+    }
+
     if (E.cy == E.num_lines) return;
     if (E.cx == 0 && E.cy == 0 && E.num_lines == 1 && E.lines[0].len == 0) return;
 
@@ -687,8 +726,46 @@ void editor_del_char() {
     }
 }
 
+char *editor_prompt(const char *prompt_fmt, ...) {
+    char buffer[128]; // Small buffer for input
+    int buflen = 0;
+
+    while (1) {
+        editor_set_status_message(prompt_fmt, buffer);
+        editor_refresh_screen();
+
+        int c = getch();
+        if (c == '\r' || c == '\n') { // Enter key
+            if (buflen > 0) {
+                return strdup(buffer); // Return a dynamically allocated copy
+            }
+            editor_set_status_message(""); // Clear message if empty enter
+            return NULL; // Empty string entered
+        } else if (c == CTRL('c') || c == CTRL('q') || c == 27) { // Ctrl+C, Ctrl+Q, or ESC to cancel
+            editor_set_status_message("");
+            return NULL; // Cancelled
+        } else if (c == KEY_BACKSPACE || c == 127 || c == KEY_DC) { // Backspace or Delete
+            if (buflen > 0) {
+                buflen--;
+                buffer[buflen] = '\0';
+            }
+        } else if (c >= 32 && c <= 126) { // Printable ASCII characters
+            if (buflen < sizeof(buffer) - 1) {
+                buffer[buflen++] = c;
+                buffer[buflen] = '\0';
+            }
+        }
+    }
+}
+
+
 void editor_process_keypress() {
     int c = getch();
+
+    if (E.select_all_active && c != KEY_BACKSPACE && c != KEY_DC && c != 127) {
+        E.select_all_active = 0;
+        editor_set_status_message("");
+    }
 
     switch (c) {
         case CTRL('q'):
@@ -705,6 +782,13 @@ void editor_process_keypress() {
 
         case CTRL('s'):
             editor_save_file();
+            break;
+
+        case CTRL('a'):
+            E.select_all_active = 1;
+            E.cx = 0;
+            E.cy = 0;
+            editor_set_status_message("All text selected. Press Backspace to delete.");
             break;
 
         case KEY_BACKSPACE:
@@ -948,7 +1032,7 @@ int main(int argc, char *argv[]) {
         E.lines[0].hl_open_comment = 0;
         E.num_lines = 1;
         editor_update_syntax(0);
-        editor_set_status_message("Welcome to miniedit! Press Ctrl+Q to quit. Ctrl+S to save.");
+        editor_set_status_message("Welcome to Nimki! Press Ctrl+Q to quit. Ctrl+S to save.");
     }
 
     while (1) {

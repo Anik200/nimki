@@ -14,6 +14,6 @@ Nimki is a simple text editor written in C.
      sudo make install
      
 # Usage
-save files with ctrl + s
-exit the editor with ctrl + q or ctrl + c
+save files with [ctrl + s]
+exit the editor with [ctrl + q] or [ctrl + c], find text with [ctrl + f] undo with [ctrl + z]
      

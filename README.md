@@ -2,8 +2,8 @@
 Nimki is a simple text editor written in C.
 # Installation
   # Dependecies
-    `ncurses
-     gcc`
+     ncurses
+     gcc
 1. install the Dependecies
 2. Clone this repo and build the binary
 ####

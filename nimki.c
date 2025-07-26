@@ -1,0 +1,960 @@
+#define _GNU_SOURCE
+
+#include <ncurses.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <errno.h>
+#include <time.h>
+#include <stdarg.h>
+#include <ctype.h>
+// #include <mouse.h> // Removed: Mouse functions are typically declared in ncurses.h
+
+#define EDITOR_VERSION "0.1.0"
+#define TAB_STOP 4
+
+#define CTRL(k) ((k) & 0x1f)
+
+enum EditorHighlight {
+    HL_NORMAL = 0,
+    HL_COMMENT,
+    HL_KEYWORD1,
+    HL_KEYWORD2,
+    HL_STRING,
+    HL_NUMBER,
+    HL_MATCH,
+    HL_PREPROC
+};
+
+typedef struct {
+    char **filetype_extensions;
+    char **keywords1;
+    char **keywords2;
+    char *singleline_comment_start;
+    char *multiline_comment_start;
+    char *multiline_comment_end;
+} EditorSyntax;
+
+typedef struct {
+    char *text;
+    size_t len;
+    char *hl;
+    int hl_open_comment;
+} EditorLine;
+
+typedef struct {
+    EditorLine *lines;
+    int num_lines;
+    int cx, cy;
+    int row_offset;
+    int col_offset;
+    int screen_rows, screen_cols;
+    char *filename;
+    int dirty;
+} EditorConfig;
+
+EditorConfig E;
+
+EditorSyntax *E_syntax = NULL;
+
+char *C_HL_extensions[] = { ".c", ".h", ".cpp", ".hpp", ".cc", NULL };
+char *C_HL_keywords[] = {
+    "switch", "if", "while", "for", "break", "continue", "return", "else",
+    "goto", "auto", "register", "extern", "const", "unsigned", "signed",
+    "volatile", "do", "typeof", "_Bool", "_Complex", "_Imaginary",
+    "case", "default", "sizeof", "enum", "union", "struct", "typedef", NULL
+};
+char *C_HL_types[] = {
+    "int", "char", "float", "double", "void", "long", "short", NULL
+};
+EditorSyntax C_syntax = {
+    C_HL_extensions,
+    C_HL_keywords,
+    C_HL_types,
+    "//",
+    "/*",
+    "*/",
+};
+
+char *SH_HL_extensions[] = { ".sh", NULL };
+char *SH_HL_keywords[] = {
+    "if", "then", "else", "fi", "for", "in", "do", "done", "while", "until",
+    "case", "esac", "function", "return", "export", "local", "read", "echo",
+    "printf", "test", "exit", "break", "continue", "set", "unset", "trap",
+    "eval", "exec", "source", ".", NULL
+};
+char *SH_HL_types[] = { NULL };
+EditorSyntax SH_syntax = {
+    SH_HL_extensions,
+    SH_HL_keywords,
+    SH_HL_types,
+    "#",
+    NULL,
+    NULL,
+};
+
+char *JS_HL_extensions[] = { ".js", NULL };
+char *JS_HL_keywords[] = {
+    "function", "var", "let", "const", "if", "else", "for", "while", "do",
+    "return", "break", "continue", "switch", "case", "default", "try",
+    "catch", "finally", "throw", "new", "this", "super", "class", "extends",
+    "import", "export", "await", "async", "yield", "typeof", "instanceof",
+    "delete", "in", "void", "debugger", "with", NULL
+};
+char *JS_HL_types[] = { NULL };
+EditorSyntax JS_syntax = {
+    JS_HL_extensions,
+    JS_HL_keywords,
+    JS_HL_types,
+    "//",
+    "/*",
+    "*/",
+};
+
+char *HTML_HL_extensions[] = { ".html", ".htm", NULL };
+char *HTML_HL_keywords[] = {
+    "html", "head", "body", "title", "meta", "link", "script", "style", "div",
+    "p", "a", "img", "ul", "ol", "li", "table", "tr", "td", "th", "form",
+    "input", "button", "span", "h1", "h2", "h3", "h4", "h5", "h6", "br", "hr",
+    "em", "strong", "b", "i", "code", "pre", NULL
+};
+char *HTML_HL_types[] = { NULL };
+EditorSyntax HTML_syntax = {
+    HTML_HL_extensions,
+    HTML_HL_keywords,
+    HTML_HL_types,
+    NULL,
+    "<!--",
+    "-->",
+};
+
+char *CSS_HL_extensions[] = { ".css", NULL };
+char *CSS_HL_keywords[] = {
+    "color", "background-color", "font-size", "margin", "padding", "border",
+    "display", "position", "width", "height", "top", "right", "bottom", "left",
+    "text-align", "line-height", "font-family", "font-weight", "float", "clear",
+    "overflow", "z-index", "opacity", "transform", "transition", "animation",
+    "selector", "class", "id", "media", "keyframes", "from", "to", "important", NULL
+};
+char *CSS_HL_types[] = { NULL };
+EditorSyntax CSS_syntax = {
+    CSS_HL_extensions,
+    CSS_HL_keywords,
+    CSS_HL_types,
+    NULL,
+    "/*",
+    "*/",
+};
+
+char *XML_HL_extensions[] = { ".xml", NULL };
+char *XML_HL_keywords[] = {
+    "xml", "version", "encoding", "root", "element", "attribute", "value",
+    "item", "data", "note", "to", "from", "heading", "body", NULL
+};
+char *XML_HL_types[] = { NULL };
+EditorSyntax XML_syntax = {
+    XML_HL_extensions,
+    XML_HL_keywords,
+    XML_HL_types,
+    NULL,
+    "<!--",
+    "-->",
+};
+
+
+EditorSyntax *EditorSyntaxes[] = {
+    &C_syntax,
+    &SH_syntax,
+    &JS_syntax,
+    &HTML_syntax,
+    &CSS_syntax,
+    &XML_syntax,
+    NULL
+};
+
+
+void init_editor();
+void cleanup_editor();
+void editor_read_file(const char *filename);
+void editor_save_file();
+void editor_draw_rows();
+void editor_refresh_screen();
+void editor_move_cursor(int key);
+void editor_process_keypress();
+void editor_insert_char(int c);
+void editor_insert_newline();
+void editor_del_char();
+void editor_set_status_message(const char *fmt, ...);
+int get_cx_display();
+void editor_select_syntax_highlight();
+void editor_update_syntax(int filerow);
+int is_separator(int c);
+
+void init_editor() {
+    E.cx = 0;
+    E.cy = 0;
+    E.num_lines = 0;
+    E.lines = NULL;
+    E.row_offset = 0;
+    E.col_offset = 0;
+    E.filename = NULL;
+    E.dirty = 0;
+
+    initscr();
+    raw();
+    noecho();
+    keypad(stdscr, TRUE);
+
+    getmaxyx(stdscr, E.screen_rows, E.screen_cols);
+    E.screen_rows -= 2;
+
+    if (has_colors()) {
+        start_color();
+        use_default_colors();
+        init_pair(HL_NORMAL, COLOR_WHITE, COLOR_BLACK);
+        init_pair(HL_COMMENT, COLOR_CYAN, COLOR_BLACK);
+        init_pair(HL_KEYWORD1, COLOR_YELLOW, COLOR_BLACK);
+        init_pair(HL_KEYWORD2, COLOR_GREEN, COLOR_BLACK);
+        init_pair(HL_STRING, COLOR_MAGENTA, COLOR_BLACK);
+        init_pair(HL_NUMBER, COLOR_RED, COLOR_BLACK);
+        init_pair(HL_MATCH, COLOR_BLACK, COLOR_YELLOW);
+        init_pair(HL_PREPROC, COLOR_BLUE, COLOR_BLACK);
+    }
+
+    mousemask(ALL_MOUSE_EVENTS | REPORT_MOUSE_POSITION, NULL);
+}
+
+void cleanup_editor() {
+    endwin();
+
+    if (E.lines) {
+        for (int i = 0; i < E.num_lines; ++i) {
+            free(E.lines[i].text);
+            free(E.lines[i].hl);
+        }
+        free(E.lines);
+    }
+    if (E.filename) {
+        free(E.filename);
+    }
+}
+
+void editor_read_file(const char *filename) {
+    if (E.filename) free(E.filename);
+    E.filename = strdup(filename);
+    if (E.filename == NULL) {
+        cleanup_editor();
+        fprintf(stderr, "Fatal error: out of memory (filename).\n");
+        exit(1);
+    }
+
+    editor_select_syntax_highlight();
+
+    FILE *fp = fopen(filename, "r");
+    if (!fp) {
+        if (errno == ENOENT) {
+            E.lines = malloc(sizeof(EditorLine));
+            if (E.lines == NULL) {
+                cleanup_editor();
+                fprintf(stderr, "Fatal error: out of memory (initial line).\n");
+                exit(1);
+            }
+            E.lines[0].text = strdup("");
+            if (E.lines[0].text == NULL) {
+                cleanup_editor();
+                fprintf(stderr, "Fatal error: out of memory (initial line text).\n");
+                exit(1);
+            }
+            E.lines[0].len = 0;
+            E.lines[0].hl = NULL;
+            E.lines[0].hl_open_comment = 0;
+            E.num_lines = 1;
+            editor_set_status_message("New file: %s", filename);
+        } else {
+            cleanup_editor();
+            fprintf(stderr, "Error opening file '%s': %s\n", filename, strerror(errno));
+            exit(1);
+        }
+        return;
+    }
+
+    char *line_buffer = NULL;
+    size_t linecap = 0;
+    ssize_t linelen;
+
+    while ((linelen = getline(&line_buffer, &linecap, fp)) != -1) {
+        while (linelen > 0 && (line_buffer[linelen - 1] == '\n' || line_buffer[linelen - 1] == '\r')) {
+            linelen--;
+        }
+
+        E.lines = realloc(E.lines, (E.num_lines + 1) * sizeof(EditorLine));
+        if (E.lines == NULL) {
+            free(line_buffer);
+            cleanup_editor();
+            fprintf(stderr, "Fatal error: out of memory (realloc lines).\n");
+            exit(1);
+        }
+
+        E.lines[E.num_lines].text = malloc(linelen + 1);
+        if (E.lines[E.num_lines].text == NULL) {
+            free(line_buffer);
+            cleanup_editor();
+            fprintf(stderr, "Fatal error: out of memory (line text).\n");
+            exit(1);
+        }
+        memcpy(E.lines[E.num_lines].text, line_buffer, linelen);
+        E.lines[E.num_lines].text[linelen] = '\0';
+        E.lines[E.num_lines].len = linelen;
+        E.lines[E.num_lines].hl = NULL;
+        E.lines[E.num_lines].hl_open_comment = 0;
+        E.num_lines++;
+    }
+    free(line_buffer);
+    fclose(fp);
+
+    for (int i = 0; i < E.num_lines; i++) {
+        editor_update_syntax(i);
+    }
+
+    E.dirty = 0;
+    editor_set_status_message("Opened file: %s (%d lines)", filename, E.num_lines);
+}
+
+void editor_save_file() {
+    if (!E.filename) {
+        editor_set_status_message("No filename specified. (Ctrl+S to save)");
+        return;
+    }
+
+    FILE *fp = fopen(E.filename, "w");
+    if (!fp) {
+        editor_set_status_message("Error saving file: %s", strerror(errno));
+        return;
+    }
+
+    for (int i = 0; i < E.num_lines; ++i) {
+        fprintf(fp, "%s\n", E.lines[i].text);
+    }
+    fclose(fp);
+    E.dirty = 0;
+    editor_set_status_message("File saved: %s", E.filename);
+}
+
+void editor_draw_rows() {
+    int y;
+    for (y = 0; y < E.screen_rows; y++) {
+        int filerow = y + E.row_offset;
+
+        if (filerow >= E.num_lines) {
+            mvprintw(y, 0, "~");
+        } else {
+            EditorLine *line = &E.lines[filerow];
+            int current_color_pair = HL_NORMAL;
+            int display_col = 0;
+
+            for (int i = 0; i < line->len; i++) {
+                int char_display_width = 1;
+                if (line->text[i] == '\t') {
+                    char_display_width = TAB_STOP - (display_col % TAB_STOP);
+                }
+
+                if (display_col < E.col_offset) {
+                    display_col += char_display_width;
+                    continue;
+                }
+
+                if ((display_col - E.col_offset) >= E.screen_cols) break;
+
+                if (E_syntax && has_colors()) {
+                    int hl_type = line->hl[i];
+                    if (hl_type != current_color_pair) {
+                        attroff(COLOR_PAIR(current_color_pair));
+                        current_color_pair = hl_type;
+                        attron(COLOR_PAIR(current_color_pair));
+                    }
+                }
+
+                if (line->text[i] == '\t') {
+                    for (int k = 0; k < char_display_width; k++) {
+                        mvaddch(y, (display_col - E.col_offset) + k, ' ');
+                    }
+                } else {
+                    mvaddch(y, (display_col - E.col_offset), line->text[i]);
+                }
+                display_col += char_display_width;
+            }
+            if (E_syntax && has_colors()) {
+                attroff(COLOR_PAIR(current_color_pair));
+            }
+        }
+        clrtoeol();
+    }
+}
+
+void editor_draw_status_bar() {
+    attron(A_REVERSE);
+
+    mvprintw(E.screen_rows, 0, "%.20s - %d lines %s",
+             E.filename ? E.filename : "[No Name]", E.num_lines,
+             E.dirty ? "(modified)" : "");
+
+    char rstatus[80];
+    snprintf(rstatus, sizeof(rstatus), "%d/%d", E.cy + 1, E.num_lines);
+    mvprintw(E.screen_rows, E.screen_cols - strlen(rstatus), "%s", rstatus);
+
+    attroff(A_REVERSE);
+}
+
+char status_message[80];
+time_t status_message_time;
+
+void editor_set_status_message(const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(status_message, sizeof(status_message), fmt, ap);
+    va_end(ap);
+    status_message_time = time(NULL);
+}
+
+void editor_draw_message_bar() {
+    move(E.screen_rows + 1, 0);
+    clrtoeol();
+
+    int msglen = strlen(status_message);
+    if (msglen > E.screen_cols) msglen = E.screen_cols;
+    if (time(NULL) - status_message_time < 5) {
+        mvprintw(E.screen_rows + 1, 0, "%.*s", msglen, status_message);
+    }
+}
+
+void editor_scroll() {
+    if (E.cy < E.row_offset) {
+        E.row_offset = E.cy;
+    }
+    if (E.cy >= E.row_offset + E.screen_rows) {
+        E.row_offset = E.cy - E.screen_rows + 1;
+    }
+
+    int current_line_len = (E.cy < E.num_lines) ? E.lines[E.cy].len : 0;
+    if (E.cx > current_line_len) {
+        E.cx = current_line_len;
+    }
+
+    int current_cx_display = get_cx_display();
+
+    if (current_cx_display < E.col_offset) {
+        E.col_offset = current_cx_display;
+    }
+    if (current_cx_display >= E.col_offset + E.screen_cols) {
+        E.col_offset = current_cx_display - E.screen_cols + 1;
+    }
+}
+
+void editor_refresh_screen() {
+    editor_scroll();
+
+    clear();
+
+    editor_draw_rows();
+    editor_draw_status_bar();
+    editor_draw_message_bar();
+
+    move(E.cy - E.row_offset, get_cx_display() - E.col_offset);
+    refresh();
+}
+
+int get_cx_display() {
+    int display_cx = 0;
+    if (E.cy >= E.num_lines) return 0;
+
+    EditorLine *line = &E.lines[E.cy];
+    for (int i = 0; i < E.cx; i++) {
+        if (i >= line->len) break;
+        if (line->text[i] == '\t') {
+            display_cx += (TAB_STOP - (display_cx % TAB_STOP));
+        } else {
+            display_cx++;
+        }
+    }
+    return display_cx;
+}
+
+void editor_move_cursor(int key) {
+    EditorLine *line = (E.cy >= E.num_lines) ? NULL : &E.lines[E.cy];
+
+    switch (key) {
+        case KEY_LEFT:
+            if (E.cx > 0) {
+                E.cx--;
+            } else if (E.cy > 0) {
+                E.cy--;
+                E.cx = E.lines[E.cy].len;
+            }
+            break;
+        case KEY_RIGHT:
+            if (line && E.cx < line->len) {
+                E.cx++;
+            } else if (line && E.cx == line->len && E.cy < E.num_lines - 1) {
+                E.cy++;
+                E.cx = 0;
+            }
+            break;
+        case KEY_UP:
+            if (E.cy > 0) {
+                E.cy--;
+            }
+            break;
+        case KEY_DOWN:
+            if (E.cy < E.num_lines - 1) {
+                E.cy++;
+            }
+            break;
+        case KEY_HOME:
+            E.cx = 0;
+            break;
+        case KEY_END:
+            if (line) E.cx = line->len;
+            break;
+        case KEY_PPAGE:
+        case KEY_NPAGE:
+            {
+                int times = E.screen_rows;
+                while (times--) {
+                    if (key == KEY_PPAGE) {
+                        if (E.cy > 0) E.cy--;
+                    } else {
+                        if (E.cy < E.num_lines - 1) E.cy++;
+                    }
+                }
+            }
+            break;
+    }
+    line = (E.cy >= E.num_lines) ? NULL : &E.lines[E.cy];
+    int line_len = line ? line->len : 0;
+    if (E.cx > line_len) {
+        E.cx = line_len;
+    }
+}
+
+void editor_insert_char(int c) {
+    if (E.cy == E.num_lines) {
+        editor_insert_newline();
+        E.cy--;
+    }
+
+    EditorLine *line = &E.lines[E.cy];
+    line->text = realloc(line->text, line->len + 2);
+    if (line->text == NULL) {
+        cleanup_editor();
+        fprintf(stderr, "Fatal error: out of memory (insert char realloc).\n");
+        exit(1);
+    }
+    memmove(&line->text[E.cx + 1], &line->text[E.cx], line->len - E.cx + 1);
+    line->text[E.cx] = c;
+    line->len++;
+    E.cx++;
+    E.dirty = 1;
+
+    editor_update_syntax(E.cy);
+}
+
+void editor_insert_newline() {
+    if (E.cx == 0) {
+        E.lines = realloc(E.lines, (E.num_lines + 1) * sizeof(EditorLine));
+        if (E.lines == NULL) {
+            cleanup_editor();
+            fprintf(stderr, "Fatal error: out of memory (insert newline realloc).\n");
+            exit(1);
+        }
+        memmove(&E.lines[E.cy + 1], &E.lines[E.cy], (E.num_lines - E.cy) * sizeof(EditorLine));
+        
+        E.lines[E.cy].text = strdup("");
+        if (E.lines[E.cy].text == NULL) {
+            cleanup_editor();
+            fprintf(stderr, "Fatal error: out of memory (insert newline strdup).\n");
+            exit(1);
+        }
+        E.lines[E.cy].len = 0;
+        E.lines[E.cy].hl = NULL;
+        E.lines[E.cy].hl_open_comment = 0;
+        E.num_lines++;
+    } else {
+        EditorLine *current_line = &E.lines[E.cy];
+        E.lines = realloc(E.lines, (E.num_lines + 1) * sizeof(EditorLine));
+        if (E.lines == NULL) {
+            cleanup_editor();
+            fprintf(stderr, "Fatal error: out of memory (split line realloc).\n");
+            exit(1);
+        }
+        memmove(&E.lines[E.cy + 2], &E.lines[E.cy + 1], (E.num_lines - E.cy - 1) * sizeof(EditorLine));
+
+        E.lines[E.cy + 1].len = current_line->len - E.cx;
+        E.lines[E.cy + 1].text = strdup(&current_line->text[E.cx]);
+        if (E.lines[E.cy + 1].text == NULL) {
+            cleanup_editor();
+            fprintf(stderr, "Fatal error: out of memory (split line strdup).\n");
+            exit(1);
+        }
+        E.lines[E.cy + 1].hl = NULL;
+        E.lines[E.cy + 1].hl_open_comment = 0;
+
+        current_line->text = realloc(current_line->text, E.cx + 1);
+        if (current_line->text == NULL) {
+            cleanup_editor();
+            fprintf(stderr, "Fatal error: out of memory (truncate line realloc).\n");
+            exit(1);
+        }
+        current_line->text[E.cx] = '\0';
+        current_line->len = E.cx;
+        E.num_lines++;
+    }
+    E.cy++;
+    E.cx = 0;
+    E.dirty = 1;
+
+    editor_update_syntax(E.cy - 1);
+    editor_update_syntax(E.cy);
+}
+
+void editor_del_char() {
+    if (E.cy == E.num_lines) return;
+    if (E.cx == 0 && E.cy == 0 && E.num_lines == 1 && E.lines[0].len == 0) return;
+
+    EditorLine *line = &E.lines[E.cy];
+    if (E.cx > 0) {
+        memmove(&line->text[E.cx - 1], &line->text[E.cx], line->len - E.cx + 1);
+        line->len--;
+        line->text = realloc(line->text, line->len + 1);
+        if (line->text == NULL) {
+            cleanup_editor();
+            fprintf(stderr, "Fatal error: out of memory (del char realloc).\n");
+            exit(1);
+        }
+        E.cx--;
+        E.dirty = 1;
+        editor_update_syntax(E.cy);
+    } else {
+        if (E.cy > 0) {
+            EditorLine *prev_line = &E.lines[E.cy - 1];
+            prev_line->text = realloc(prev_line->text, prev_line->len + line->len + 1);
+            if (prev_line->text == NULL) {
+                cleanup_editor();
+                fprintf(stderr, "Fatal error: out of memory (merge line realloc).\n");
+                exit(1);
+            }
+            memcpy(&prev_line->text[prev_line->len], line->text, line->len);
+            prev_line->len += line->len;
+            prev_line->text[prev_line->len] = '\0';
+
+            free(line->text);
+            free(line->hl);
+            memmove(&E.lines[E.cy], &E.lines[E.cy + 1], (E.num_lines - E.cy - 1) * sizeof(EditorLine));
+            E.num_lines--;
+            E.lines = realloc(E.lines, E.num_lines * sizeof(EditorLine));
+            if (E.num_lines > 0 && E.lines == NULL) {
+                cleanup_editor();
+                fprintf(stderr, "Fatal error: out of memory (shrink lines realloc).\n");
+                exit(1);
+            }
+
+            if (E.num_lines == 0) {
+                E.lines = malloc(sizeof(EditorLine));
+                if (E.lines == NULL) {
+                    cleanup_editor();
+                    fprintf(stderr, "Fatal error: out of memory (empty file init).\n");
+                    exit(1);
+                }
+                E.lines[0].text = strdup("");
+                if (E.lines[0].text == NULL) {
+                    cleanup_editor();
+                    fprintf(stderr, "Fatal error: out of memory (empty file text).\n");
+                    exit(1);
+                }
+                E.lines[0].len = 0;
+                E.lines[0].hl = NULL;
+                E.lines[0].hl_open_comment = 0;
+                E.num_lines = 1;
+                E.cx = 0;
+                E.cy = 0;
+                editor_update_syntax(0);
+            } else {
+                E.cx = prev_line->len - line->len;
+                E.cy--;
+                editor_update_syntax(E.cy);
+            }
+            E.dirty = 1;
+        }
+    }
+}
+
+void editor_process_keypress() {
+    int c = getch();
+
+    switch (c) {
+        case CTRL('q'):
+        case CTRL('c'):
+            if (E.dirty) {
+                editor_set_status_message("WARNING! File has unsaved changes. Press Ctrl+Q/C again to force quit.");
+                editor_refresh_screen();
+                int c2 = getch();
+                if (c2 != CTRL('q') && c2 != CTRL('c')) return;
+            }
+            cleanup_editor();
+            exit(0);
+            break;
+
+        case CTRL('s'):
+            editor_save_file();
+            break;
+
+        case KEY_BACKSPACE:
+        case KEY_DC:
+        case 127:
+            editor_del_char();
+            break;
+
+        case '\r':
+        case '\n':
+            editor_insert_newline();
+            break;
+
+        case KEY_HOME:
+        case KEY_END:
+        case KEY_PPAGE:
+        case KEY_NPAGE:
+        case KEY_UP:
+        case KEY_DOWN:
+        case KEY_LEFT:
+        case KEY_RIGHT:
+            editor_move_cursor(c);
+            break;
+
+        case KEY_MOUSE:
+            {
+                MEVENT event;
+                if (getmouse(&event) == OK) {
+                    if (event.bstate & BUTTON1_CLICKED) {
+                        E.cy = event.y + E.row_offset;
+                        
+                        int target_display_cx = event.x + E.col_offset;
+                        int actual_cx = 0;
+                        if (E.cy < E.num_lines) {
+                            EditorLine *line = &E.lines[E.cy];
+                            int current_display_cx = 0;
+                            for (int char_idx = 0; char_idx < line->len; char_idx++) {
+                                int char_display_width = 1;
+                                if (line->text[char_idx] == '\t') {
+                                    char_display_width = TAB_STOP - (current_display_cx % TAB_STOP);
+                                }
+                                if (current_display_cx + char_display_width > target_display_cx) {
+                                    break;
+                                }
+                                current_display_cx += char_display_width;
+                                actual_cx = char_idx + 1;
+                            }
+                        }
+                        E.cx = actual_cx;
+
+                        if (E.cy >= E.num_lines) {
+                            E.cy = E.num_lines > 0 ? E.num_lines - 1 : 0;
+                        }
+                        EditorLine *line = (E.cy < E.num_lines) ? &E.lines[E.cy] : NULL;
+                        int line_len = line ? line->len : 0;
+                        if (E.cx > line_len) {
+                            E.cx = line_len;
+                        }
+                    }
+                }
+            }
+            break;
+
+        default:
+            if (c >= 32 && c <= 126) {
+                 editor_insert_char(c);
+            }
+            break;
+    }
+}
+
+int is_separator(int c) {
+    return isspace(c) || c == '\0' || strchr(",.()+-/*=~%<>[];", c) != NULL;
+}
+
+void editor_select_syntax_highlight() {
+    E_syntax = NULL;
+
+    if (E.filename) {
+        char *ext = strrchr(E.filename, '.');
+
+        if (ext) {
+            for (int i = 0; EditorSyntaxes[i]; i++) {
+                EditorSyntax *syntax = EditorSyntaxes[i];
+                for (int j = 0; syntax->filetype_extensions[j]; j++) {
+                    if (strcmp(ext, syntax->filetype_extensions[j]) == 0) {
+                        E_syntax = syntax;
+                        return;
+                    }
+                }
+            }
+        }
+    }
+}
+
+void editor_update_syntax(int filerow) {
+    EditorLine *line = &E.lines[filerow];
+
+    if (line->hl) free(line->hl);
+    line->hl = malloc(line->len);
+    if (line->hl == NULL) { return; }
+    memset(line->hl, HL_NORMAL, line->len);
+
+    if (E_syntax == NULL) return;
+
+    char **keywords1 = E_syntax->keywords1;
+    char **keywords2 = E_syntax->keywords2;
+    char *sc_start = E_syntax->singleline_comment_start;
+    char *mc_start = E_syntax->multiline_comment_start;
+    char *mc_end = E_syntax->multiline_comment_end;
+
+    int prev_sep = 1;
+    int in_string = 0;
+    int in_multiline_comment = (filerow > 0 && E.lines[filerow - 1].hl_open_comment);
+
+    int i = 0;
+    while (i < line->len) {
+        char c = line->text[i];
+        unsigned char prev_hl = (i > 0) ? line->hl[i-1] : HL_NORMAL;
+
+        if (mc_start && mc_end) {
+            if (in_multiline_comment) {
+                line->hl[i] = HL_COMMENT;
+                if (strncmp(&line->text[i], mc_end, strlen(mc_end)) == 0) {
+                    for (size_t j = 0; j < strlen(mc_end); j++) line->hl[i+j] = HL_COMMENT;
+                    i += strlen(mc_end);
+                    in_multiline_comment = 0;
+                    prev_sep = 1;
+                    continue;
+                }
+                i++;
+                continue;
+            } else if (strncmp(&line->text[i], mc_start, strlen(mc_start)) == 0) {
+                for (size_t j = 0; j < strlen(mc_start); j++) line->hl[i+j] = HL_COMMENT;
+                i += strlen(mc_start);
+                in_multiline_comment = 1;
+                continue;
+            }
+        }
+
+        if (sc_start && strncmp(&line->text[i], sc_start, strlen(sc_start)) == 0) {
+            for (size_t j = i; j < line->len; j++) {
+                line->hl[j] = HL_COMMENT;
+            }
+            break;
+        }
+
+        if (in_string) {
+            line->hl[i] = HL_STRING;
+            if (c == '\\' && i + 1 < line->len) {
+                line->hl[i+1] = HL_STRING;
+                i += 2;
+                continue;
+            }
+            if (c == in_string) {
+                in_string = 0;
+            }
+            i++;
+            prev_sep = 0;
+            continue;
+        } else {
+            if (c == '"' || c == '\'') {
+                in_string = c;
+                line->hl[i] = HL_STRING;
+                i++;
+                prev_sep = 0;
+                continue;
+            }
+        }
+
+        if (isdigit(c) && (prev_sep || prev_hl == HL_NUMBER)) {
+            line->hl[i] = HL_NUMBER;
+            i++;
+            prev_sep = 0;
+            continue;
+        }
+
+        if (i == 0 && c == '#') {
+            for (size_t j = 0; j < line->len; j++) {
+                line->hl[j] = HL_PREPROC;
+            }
+            break;
+        }
+
+        if (prev_sep) {
+            for (size_t k = 0; keywords1[k]; k++) {
+                size_t kwlen = strlen(keywords1[k]);
+                if (strncmp(&line->text[i], keywords1[k], kwlen) == 0 &&
+                    is_separator(line->text[i + kwlen])) {
+                    for (size_t j = 0; j < kwlen; j++) line->hl[i+j] = HL_KEYWORD1;
+                    i += kwlen;
+                    prev_sep = 0;
+                    goto next_char_in_loop;
+                }
+            }
+            for (size_t k = 0; keywords2[k]; k++) {
+                size_t kwlen = strlen(keywords2[k]);
+                if (strncmp(&line->text[i], keywords2[k], kwlen) == 0 &&
+                    is_separator(line->text[i + kwlen])) {
+                    for (size_t j = 0; j < kwlen; j++) line->hl[i+j] = HL_KEYWORD2;
+                    i += kwlen;
+                    prev_sep = 0;
+                    goto next_char_in_loop;
+                }
+            }
+        }
+
+        prev_sep = is_separator(c);
+        i++;
+        next_char_in_loop:;
+    }
+
+    int changed_comment_state = (line->hl_open_comment != in_multiline_comment);
+    line->hl_open_comment = in_multiline_comment;
+
+    if (changed_comment_state && filerow + 1 < E.num_lines) {
+        editor_update_syntax(filerow + 1);
+    }
+}
+
+int main(int argc, char *argv[]) {
+    init_editor();
+
+    if (argc >= 2) {
+        editor_read_file(argv[1]);
+    } else {
+        E.lines = malloc(sizeof(EditorLine));
+        if (E.lines == NULL) {
+            cleanup_editor();
+            fprintf(stderr, "Fatal error: out of memory (main empty line).\n");
+            exit(1);
+        }
+        E.lines[0].text = strdup("");
+        if (E.lines[0].text == NULL) {
+            cleanup_editor();
+            fprintf(stderr, "Fatal error: out of memory (main empty line text).\n");
+            exit(1);
+        }
+        E.lines[0].len = 0;
+        E.lines[0].hl = NULL;
+        E.lines[0].hl_open_comment = 0;
+        E.num_lines = 1;
+        editor_update_syntax(0);
+        editor_set_status_message("Welcome to miniedit! Press Ctrl+Q to quit. Ctrl+S to save.");
+    }
+
+    while (1) {
+        editor_refresh_screen();
+        editor_process_keypress();
+    }
+
+    return 0;
+}

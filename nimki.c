@@ -8,9 +8,9 @@
 #include <time.h>
 #include <stdarg.h>
 #include <ctype.h>
-#include <unistd.h> 
+#include <unistd.h>
 #include <sys/wait.h>
-#include <signal.h>   
+#include <signal.h>
 
 #define EDITOR_VERSION "0.1.0"
 #define TAB_STOP 4
@@ -185,7 +185,7 @@ void editor_refresh_screen();
 void editor_move_cursor(int key);
 void editor_process_keypress();
 void editor_insert_char(int c);
-int editor_insert_newline(); // Modified to return int for success/failure
+int editor_insert_newline();
 void editor_del_char();
 void editor_set_status_message(const char *fmt, ...);
 int get_cx_display();
@@ -194,8 +194,8 @@ void editor_update_syntax(int filerow);
 int is_separator(int c);
 char *editor_prompt(const char *prompt_fmt, ...);
 void paste_from_clipboard();
-void handle_winch(int sig); // Prototype for SIGWINCH handler
-void editor_draw_clock(); // Prototype for the new clock function
+void handle_winch(int sig);
+void editor_draw_clock();
 
 void init_editor() {
     E.cx = 0;
@@ -212,13 +212,11 @@ void init_editor() {
     raw();
     noecho();
     keypad(stdscr, TRUE);
-    // Removed nodelay(stdscr, TRUE); to make getch() blocking again
 
-    // Register SIGWINCH handler
     signal(SIGWINCH, handle_winch);
 
     getmaxyx(stdscr, E.screen_rows, E.screen_cols);
-    E.screen_rows -= 2; // Reserve space for status and message bars
+    E.screen_rows -= 2;
 
     if (has_colors()) {
         start_color();
@@ -233,7 +231,6 @@ void init_editor() {
         init_pair(HL_PREPROC, COLOR_BLUE, COLOR_BLACK);
     }
 
-    // Enable mouse events for clicks and wheel
     mousemask(ALL_MOUSE_EVENTS | REPORT_MOUSE_POSITION, NULL);
 }
 
@@ -445,20 +442,15 @@ void editor_draw_message_bar() {
     }
 }
 
-// New function to draw the clock
 void editor_draw_clock() {
     time_t rawtime;
     struct tm *info;
-    char time_str[6]; // HH:MM\0
+    char time_str[6];
 
     time(&rawtime);
     info = localtime(&rawtime);
     strftime(time_str, sizeof(time_str), "%H:%M", info);
 
-    // Position the clock in the upper right corner
-    // Assuming the main editing area starts at (0,0) and status/message bars are at the bottom
-    // The clock should be drawn in the top-most line of the terminal, not within E.screen_rows
-    // So, it's drawn at row 0.
     int clock_len = strlen(time_str);
     if (E.screen_cols >= clock_len) {
         mvprintw(0, E.screen_cols - clock_len, "%s", time_str);
@@ -492,15 +484,15 @@ void editor_scroll() {
 void editor_refresh_screen() {
     editor_scroll();
 
-    clear(); // Clear the entire screen
+    clear();
 
     editor_draw_rows();
     editor_draw_status_bar();
     editor_draw_message_bar();
-    editor_draw_clock(); // Draw the clock
+    editor_draw_clock();
 
     move(E.cy - E.row_offset, get_cx_display() - E.col_offset);
-    refresh(); // Update the physical screen
+    refresh();
 }
 
 int get_cx_display() {
@@ -577,41 +569,34 @@ void editor_move_cursor(int key) {
 }
 
 void editor_insert_char(int c) {
-    // If at the end of the file, try to insert a new line first
     if (E.cy == E.num_lines) {
         if (editor_insert_newline() == -1) {
-            // If inserting a new line failed, we cannot insert the character
             editor_set_status_message("Error: Failed to prepare new line for character insertion.");
             return;
         }
     }
 
-    // Ensure E.lines is not NULL and E.cy is a valid index after potential newline insertion
     if (E.lines == NULL || E.cy >= E.num_lines) {
         editor_set_status_message("Internal error: Invalid line state for character insertion.");
         return;
     }
 
     EditorLine *line = &E.lines[E.cy];
-    // Reallocate memory for the line text to accommodate the new character + null terminator
     line->text = realloc(line->text, line->len + 2);
     if (line->text == NULL) {
         editor_set_status_message("Error: Out of memory for line %d.", E.cy);
-        return; // Do not exit, try to continue
+        return;
     }
-    // Shift existing characters to the right to make space for the new character
     memmove(&line->text[E.cx + 1], &line->text[E.cx], line->len - E.cx + 1);
-    line->text[E.cx] = c; // Insert the new character
-    line->len++;          // Increment line length
-    E.cx++;               // Move cursor to the right
-    E.dirty = 1;          // Mark file as modified
+    line->text[E.cx] = c;
+    line->len++;
+    E.cx++;
+    E.dirty = 1;
 
-    editor_update_syntax(E.cy); // Update syntax highlighting for the current line
+    editor_update_syntax(E.cy);
 }
 
-// Returns 0 on success, -1 on failure
 int editor_insert_newline() {
-    // Case 1: Inserting a new line into an empty file
     if (E.num_lines == 0) {
         E.lines = malloc(sizeof(EditorLine));
         if (E.lines == NULL) {
@@ -620,7 +605,7 @@ int editor_insert_newline() {
         }
         E.lines[0].text = strdup("");
         if (E.lines[0].text == NULL) {
-            free(E.lines); // Clean up partially allocated memory
+            free(E.lines);
             E.lines = NULL;
             editor_set_status_message("Error: Out of memory for initial line text.");
             return -1;
@@ -636,47 +621,35 @@ int editor_insert_newline() {
         return 0;
     }
 
-    // Reallocate E.lines to make space for a new line
     E.lines = realloc(E.lines, (E.num_lines + 1) * sizeof(EditorLine));
     if (E.lines == NULL) {
         editor_set_status_message("Error: Out of memory for lines array (realloc).");
         return -1;
     }
 
-    // Shift existing lines down to make space for the new line
-    // If inserting at the end of the file (E.cy == E.num_lines), this memmove does nothing, which is correct.
     memmove(&E.lines[E.cy + 1], &E.lines[E.cy], (E.num_lines - E.cy) * sizeof(EditorLine));
 
-    // Initialize the new line
     E.lines[E.cy].hl = NULL;
     E.lines[E.cy].hl_open_comment = 0;
 
-    // If cursor is at the beginning of a line, insert an empty line
     if (E.cx == 0) {
         E.lines[E.cy].text = strdup("");
         if (E.lines[E.cy].text == NULL) {
-            // Revert memmove if possible, or handle gracefully
             editor_set_status_message("Error: Out of memory for new empty line text.");
-            // This is tricky: if strdup fails, we've already realloc'd and memmoved.
-            // For simplicity in a minimalist editor, we'll just report error and leave
-            // the lines array in a potentially inconsistent state (a line with NULL text).
-            // A more robust editor would need to undo the realloc/memmove.
             return -1;
         }
         E.lines[E.cy].len = 0;
-    } else { // Split the current line
-        EditorLine *current_line = &E.lines[E.cy]; // This is the line *before* it was potentially overwritten by memmove
-        // Need to copy the part of the line *after* the cursor to the new line
+    } else {
+        EditorLine *current_line = &E.lines[E.cy];
         E.lines[E.cy + 1].len = current_line->len - E.cx;
         E.lines[E.cy + 1].text = strdup(&current_line->text[E.cx]);
         if (E.lines[E.cy + 1].text == NULL) {
             editor_set_status_message("Error: Out of memory for split line text.");
             return -1;
         }
-        E.lines[E.cy + 1].hl = NULL; // New line needs its own highlight array
+        E.lines[E.cy + 1].hl = NULL;
         E.lines[E.cy + 1].hl_open_comment = 0;
 
-        // Truncate the current line
         current_line->text = realloc(current_line->text, E.cx + 1);
         if (current_line->text == NULL) {
             editor_set_status_message("Error: Out of memory for truncated line.");
@@ -691,10 +664,10 @@ int editor_insert_newline() {
     E.cx = 0;
     E.dirty = 1;
 
-    editor_update_syntax(E.cy - 1); // Update syntax for the line that was potentially truncated
-    editor_update_syntax(E.cy);     // Update syntax for the newly inserted line
+    editor_update_syntax(E.cy - 1);
+    editor_update_syntax(E.cy);
 
-    return 0; // Success
+    return 0;
 }
 
 
@@ -710,14 +683,14 @@ void editor_del_char() {
         E.lines = malloc(sizeof(EditorLine));
         if (E.lines == NULL) {
             editor_set_status_message("Fatal error: Out of memory (clear all init).");
-            exit(1); // Exit on critical failure
+            exit(1);
         }
         E.lines[0].text = strdup("");
         if (E.lines[0].text == NULL) {
             free(E.lines);
             E.lines = NULL;
             editor_set_status_message("Fatal error: Out of memory (clear all text).");
-            exit(1); // Exit on critical failure
+            exit(1);
         }
         E.lines[0].len = 0;
         E.lines[0].hl = NULL;
@@ -732,11 +705,11 @@ void editor_del_char() {
         return;
     }
 
-    if (E.cy == E.num_lines || E.num_lines == 0) return; // No lines to delete from
-    if (E.cx == 0 && E.cy == 0 && E.lines[0].len == 0) return; // Only an empty first line
+    if (E.cy == E.num_lines || E.num_lines == 0) return;
+    if (E.cx == 0 && E.cy == 0 && E.lines[0].len == 0) return;
 
     EditorLine *line = &E.lines[E.cy];
-    if (E.cx > 0) { // Delete character before cursor on current line
+    if (E.cx > 0) {
         memmove(&line->text[E.cx - 1], &line->text[E.cx], line->len - E.cx + 1);
         line->len--;
         line->text = realloc(line->text, line->len + 1);
@@ -747,46 +720,41 @@ void editor_del_char() {
         E.cx--;
         E.dirty = 1;
         editor_update_syntax(E.cy);
-    } else { // Delete newline (merge current line with previous)
+    } else {
         if (E.cy > 0) {
             EditorLine *prev_line = &E.lines[E.cy - 1];
-            // Reallocate previous line to hold its content + current line's content
             prev_line->text = realloc(prev_line->text, prev_line->len + line->len + 1);
             if (prev_line->text == NULL) {
                 editor_set_status_message("Error: Out of memory (merge line realloc).");
                 return;
             }
-            // Copy current line's content to the end of the previous line
             memcpy(&prev_line->text[prev_line->len], line->text, line->len);
             prev_line->len += line->len;
-            prev_line->text[prev_line->len] = '\0'; // Null-terminate the merged line
+            prev_line->text[prev_line->len] = '\0';
 
-            free(line->text); // Free current line's text
-            free(line->hl);   // Free current line's highlight data
+            free(line->text);
+            free(line->hl);
 
-            // Shift subsequent lines up
             memmove(&E.lines[E.cy], &E.lines[E.cy + 1], (E.num_lines - E.cy - 1) * sizeof(EditorLine));
             E.num_lines--;
             E.lines = realloc(E.lines, E.num_lines * sizeof(EditorLine));
-            // If E.num_lines becomes 0, lines could be NULL, but that's handled at the top of this function
             if (E.num_lines > 0 && E.lines == NULL) {
                 editor_set_status_message("Error: Out of memory shrinking lines realloc.");
                 return;
             }
 
-            // If all lines were deleted, ensure there's at least one empty line
             if (E.num_lines == 0) {
                 E.lines = malloc(sizeof(EditorLine));
                 if (E.lines == NULL) {
                     editor_set_status_message("Fatal error: Out of memory (empty file init).");
-                    exit(1); // Exit on critical failure
+                    exit(1);
                 }
                 E.lines[0].text = strdup("");
                 if (E.lines[0].text == NULL) {
                     free(E.lines);
                     E.lines = NULL;
                     editor_set_status_message("Fatal error: Out of memory (empty file text).");
-                    exit(1); // Exit on critical failure
+                    exit(1);
                 }
                 E.lines[0].len = 0;
                 E.lines[0].hl = NULL;
@@ -796,10 +764,9 @@ void editor_del_char() {
                 E.cy = 0;
                 editor_update_syntax(0);
             } else {
-                // Adjust cursor position to the end of the merged line
-                E.cx = prev_line->len; // Set cursor to the end of the previous line
-                E.cy--; // Move cursor to the previous line
-                editor_update_syntax(E.cy); // Update syntax for the merged line
+                E.cx = prev_line->len;
+                E.cy--;
+                editor_update_syntax(E.cy);
             }
             E.dirty = 1;
         }
@@ -813,9 +780,9 @@ char *editor_prompt(const char *prompt_fmt, ...) {
 
     while (1) {
         editor_set_status_message(prompt_fmt, buffer);
-        editor_refresh_screen(); // Always refresh to show prompt
+        editor_refresh_screen();
 
-        int c = getch(); // This getch() should block for prompt input
+        int c = getch();
         if (c == '\r' || c == '\n') {
             if (buflen > 0) {
                 return strdup(buffer);
@@ -848,18 +815,15 @@ void paste_from_clipboard() {
     char *argv[3];
     int tool_found = 0;
 
-    // Try wl-paste first for Wayland
-    // Check if XDG_SESSION_TYPE is "wayland" or if wl-paste is found in common paths
     if (getenv("XDG_SESSION_TYPE") != NULL && strcmp(getenv("XDG_SESSION_TYPE"), "wayland") == 0) {
         if (access("/usr/bin/wl-paste", X_OK) == 0 || access("/bin/wl-paste", X_OK) == 0) {
             clipboard_tool = "wl-paste";
             argv[0] = "wl-paste";
-            argv[1] = NULL; // wl-paste doesn't need -o
+            argv[1] = NULL;
             tool_found = 1;
         }
     }
     
-    // Fallback to xclip for X11 if Wayland tools not found or not Wayland session
     if (!tool_found) {
         if (access("/usr/bin/xclip", X_OK) == 0 || access("/bin/xclip", X_OK) == 0) {
             clipboard_tool = "xclip";
@@ -878,7 +842,6 @@ void paste_from_clipboard() {
     editor_set_status_message("Attempting to paste using %s...", clipboard_tool);
     editor_refresh_screen();
 
-    // Flush stdout before forking to avoid ncurses issues with subshells
     fflush(stdout);
 
     if (pipe(pipefd) == -1) {
@@ -894,35 +857,31 @@ void paste_from_clipboard() {
         return;
     }
 
-    if (pid == 0) { // Child process
-        close(pipefd[0]); // Close read end
-        dup2(pipefd[1], STDOUT_FILENO); // Redirect stdout to pipe write end
-        close(pipefd[1]); // Close original write end
+    if (pid == 0) {
+        close(pipefd[0]);
+        dup2(pipefd[1], STDOUT_FILENO);
+        close(pipefd[1]);
 
         execvp(clipboard_tool, argv);
         
-        // If execvp fails
-        _exit(1); // Use _exit in child process after fork
-    } else { // Parent process
-        close(pipefd[1]); // Close write end
+        _exit(1);
+    } else {
+        close(pipefd[1]);
 
-        // Read from pipe
         while ((bytes_read = read(pipefd[0], buffer, sizeof(buffer) - 1)) > 0) {
-            buffer[bytes_read] = '\0'; // Null-terminate the buffer
+            buffer[bytes_read] = '\0';
             for (int i = 0; i < bytes_read; ++i) {
-                // Insert character by character, handling newlines
                 if (buffer[i] == '\n' || buffer[i] == '\r') {
                     editor_insert_newline();
-                } else if (buffer[i] >= 32 && buffer[i] <= 126) { // Only insert printable ASCII
+                } else if (buffer[i] >= 32 && buffer[i] <= 126) {
                     editor_insert_char(buffer[i]);
                 }
-                // Ignore other characters (e.g., non-ASCII, other control characters)
             }
         }
-        close(pipefd[0]); // Close read end
+        close(pipefd[0]);
 
         int status;
-        waitpid(pid, &status, 0); // Wait for child process to finish
+        waitpid(pid, &status, 0);
 
         if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
             editor_set_status_message("Pasted from clipboard using %s.", clipboard_tool);
@@ -932,19 +891,18 @@ void paste_from_clipboard() {
     }
 }
 
-// Signal handler for window resize events
 void handle_winch(int sig) {
-    (void)sig; // Suppress unused parameter warning
-    endwin(); // End ncurses mode temporarily
-    refresh(); // Re-initialize ncurses with new window size
-    getmaxyx(stdscr, E.screen_rows, E.screen_cols); // Get new dimensions
-    E.screen_rows -= 2; // Adjust for status and message bars
-    editor_refresh_screen(); // Redraw the editor content
+    (void)sig;
+    endwin();
+    refresh();
+    getmaxyx(stdscr, E.screen_rows, E.screen_cols);
+    E.screen_rows -= 2;
+    editor_refresh_screen();
 }
 
 void editor_process_keypress() {
-    int c = getch(); // This getch() is now blocking again
-    bool cursor_moved = false; // Track if cursor moved to trigger refresh
+    int c = getch();
+    bool cursor_moved = false;
     int original_cx = E.cx;
     int original_cy = E.cy;
 
@@ -958,8 +916,8 @@ void editor_process_keypress() {
         case CTRL('c'):
             if (E.dirty) {
                 editor_set_status_message("WARNING! File has unsaved changes. Press Ctrl+Q/C again to force quit.");
-                editor_refresh_screen(); // Refresh to show warning
-                int c2 = getch(); // This getch() should block for confirmation
+                editor_refresh_screen();
+                int c2 = getch();
                 if (c2 != CTRL('q') && c2 != CTRL('c')) return;
             }
             cleanup_editor();
@@ -975,12 +933,11 @@ void editor_process_keypress() {
             E.cx = 0;
             E.cy = 0;
             editor_set_status_message("All text selected. Press Backspace to delete.");
-            cursor_moved = true; // Cursor moved, needs refresh
+            cursor_moved = true;
             break;
 
         case CTRL('v'):
             paste_from_clipboard();
-            // Pasting modifies content and cursor, so refresh is needed
             break;
 
         case KEY_BACKSPACE:
@@ -1003,7 +960,7 @@ void editor_process_keypress() {
         case KEY_LEFT:
         case KEY_RIGHT:
             editor_move_cursor(c);
-            cursor_moved = true; // Cursor moved, needs refresh
+            cursor_moved = true;
             break;
 
         case KEY_MOUSE:
@@ -1040,21 +997,21 @@ void editor_process_keypress() {
                         if (E.cx > line_len) {
                             E.cx = line_len;
                         }
-                        cursor_moved = true; // Cursor moved by click
-                    } else if (event.bstate & BUTTON4_PRESSED) { // Mouse wheel up
-                        for (int i = 0; i < 3; ++i) { // Scroll 3 lines up
+                        cursor_moved = true;
+                    } else if (event.bstate & BUTTON4_PRESSED) {
+                        for (int i = 0; i < 3; ++i) {
                             editor_move_cursor(KEY_UP);
                         }
                         cursor_moved = true;
-                    } else if (event.bstate & BUTTON5_PRESSED) { // Mouse wheel down
-                        for (int i = 0; i < 3; ++i) { // Scroll 3 lines down
+                    } else if (event.bstate & BUTTON5_PRESSED) {
+                        for (int i = 0; i < 3; ++i) {
                             editor_move_cursor(KEY_DOWN);
                         }
                         cursor_moved = true;
                     }
                 }
             }
-            break; // Break from KEY_MOUSE case
+            break;
         default:
             if (c >= 32 && c <= 126) {
                  editor_insert_char(c);
@@ -1062,9 +1019,6 @@ void editor_process_keypress() {
             break;
     }
 
-    // Only refresh if something changed (content, cursor, or status message)
-    // The dirty flag handles content changes. Cursor changes are tracked by original_cx/cy.
-    // Status message changes are handled by editor_set_status_message.
     if (E.dirty || cursor_moved || original_cx != E.cx || original_cy != E.cy || time(NULL) - status_message_time < 5) {
         editor_refresh_screen();
     }
@@ -1244,6 +1198,8 @@ int main(int argc, char *argv[]) {
         editor_update_syntax(0);
         editor_set_status_message("Welcome to Nimki! Press Ctrl+Q to quit. Ctrl+S to save.");
     }
+    
+    editor_refresh_screen();
 
     while (1) {
         editor_process_keypress();

@@ -8,9 +8,9 @@
 #include <time.h>
 #include <stdarg.h>
 #include <ctype.h>
-#include <unistd.h>   // For pipe, fork, dup2, execvp
-#include <sys/wait.h> // For waitpid
-#include <signal.h>   // For signal handling
+#include <unistd.h> 
+#include <sys/wait.h>
+#include <signal.h>   
 
 #define EDITOR_VERSION "0.1.0"
 #define TAB_STOP 4

@@ -3,7 +3,7 @@
 
 Nimki is a simple text editor written in C.
 # Installation
-  # Dependecies
+## Dependecies
      ncurses
      gcc
      cmake

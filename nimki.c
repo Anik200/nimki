@@ -13,7 +13,7 @@
 #include <signal.h>
 #include <stdbool.h>
 
-#define EDITOR_VERSION "0.1.1"
+#define EDITOR_VERSION "0.1.0"
 #define TAB_STOP 4
 
 #define CTRL(k) ((k) & 0x1f)
@@ -1267,6 +1267,10 @@ void editor_process_keypress() {
         case KEY_DC:
         case 127:
             editor_del_char();
+            break;
+
+        case '\t': // Handle Tab key
+            editor_insert_char('\t');
             break;
 
         case '\r':

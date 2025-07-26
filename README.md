@@ -21,3 +21,4 @@ Nimki is a simple text editor written in C.
 - find text with [ctrl + f] 
 - undo with [ctrl + z]
      
+# Get Nimkified!

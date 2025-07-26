@@ -11,11 +11,14 @@
 #include <unistd.h>
 #include <sys/wait.h>
 #include <signal.h>
+#include <stdbool.h>
 
-#define EDITOR_VERSION "0.1.0"
+#define EDITOR_VERSION "0.1.1"
 #define TAB_STOP 4
 
 #define CTRL(k) ((k) & 0x1f)
+
+#define MAX_UNDO_STATES 20
 
 enum EditorHighlight {
     HL_NORMAL = 0,
@@ -48,12 +51,30 @@ typedef struct {
     EditorLine *lines;
     int num_lines;
     int cx, cy;
+    int dirty;
+} EditorStateSnapshot;
+
+
+typedef struct {
+    EditorLine *lines;
+    int num_lines;
+    int cx, cy;
     int row_offset;
     int col_offset;
     int screen_rows, screen_cols;
     char *filename;
     int dirty;
     int select_all_active;
+
+    EditorStateSnapshot undo_history[MAX_UNDO_STATES];
+    int undo_history_len;
+    int undo_history_idx;
+
+    char *search_query;
+    int search_direction; // 1 for forward, -1 for backward
+    int last_match_row;
+    int last_match_col;
+    bool find_active;
 } EditorConfig;
 
 EditorConfig E;
@@ -197,6 +218,13 @@ void paste_from_clipboard();
 void handle_winch(int sig);
 void editor_draw_clock();
 
+void editor_free_snapshot(EditorStateSnapshot *snapshot);
+void editor_save_state();
+void editor_undo();
+void editor_find();
+void editor_find_next(int direction);
+
+
 void init_editor() {
     E.cx = 0;
     E.cy = 0;
@@ -207,6 +235,22 @@ void init_editor() {
     E.filename = NULL;
     E.dirty = 0;
     E.select_all_active = 0;
+
+    E.undo_history_len = 0;
+    E.undo_history_idx = 0;
+    for (int i = 0; i < MAX_UNDO_STATES; ++i) {
+        E.undo_history[i].lines = NULL;
+        E.undo_history[i].num_lines = 0;
+        E.undo_history[i].cx = 0;
+        E.undo_history[i].cy = 0;
+        E.undo_history[i].dirty = 0;
+    }
+
+    E.search_query = NULL;
+    E.search_direction = 1;
+    E.last_match_row = -1;
+    E.last_match_col = -1;
+    E.find_active = false;
 
     initscr();
     raw();
@@ -234,6 +278,21 @@ void init_editor() {
     mousemask(ALL_MOUSE_EVENTS | REPORT_MOUSE_POSITION, NULL);
 }
 
+void editor_free_snapshot(EditorStateSnapshot *snapshot) {
+    if (snapshot->lines) {
+        for (int i = 0; i < snapshot->num_lines; ++i) {
+            free(snapshot->lines[i].text);
+            free(snapshot->lines[i].hl);
+        }
+        free(snapshot->lines);
+        snapshot->lines = NULL;
+    }
+    snapshot->num_lines = 0;
+    snapshot->cx = 0;
+    snapshot->cy = 0;
+    snapshot->dirty = 0;
+}
+
 void cleanup_editor() {
     endwin();
 
@@ -247,7 +306,124 @@ void cleanup_editor() {
     if (E.filename) {
         free(E.filename);
     }
+    if (E.search_query) {
+        free(E.search_query);
+    }
+
+    for (int i = 0; i < E.undo_history_len; ++i) {
+        editor_free_snapshot(&E.undo_history[i]);
+    }
 }
+
+void editor_save_state() {
+    if (E.undo_history_idx < E.undo_history_len) {
+        for (int i = E.undo_history_idx; i < E.undo_history_len; ++i) {
+            editor_free_snapshot(&E.undo_history[i]);
+        }
+        E.undo_history_len = E.undo_history_idx;
+    }
+
+    if (E.undo_history_len == MAX_UNDO_STATES) {
+        editor_free_snapshot(&E.undo_history[0]);
+        memmove(&E.undo_history[0], &E.undo_history[1], (MAX_UNDO_STATES - 1) * sizeof(EditorStateSnapshot));
+        E.undo_history_len--;
+        E.undo_history_idx--;
+    }
+
+    EditorStateSnapshot *new_snapshot = &E.undo_history[E.undo_history_idx];
+    new_snapshot->num_lines = E.num_lines;
+    new_snapshot->cx = E.cx;
+    new_snapshot->cy = E.cy;
+    new_snapshot->dirty = E.dirty;
+
+    new_snapshot->lines = malloc(E.num_lines * sizeof(EditorLine));
+    if (new_snapshot->lines == NULL) {
+        editor_set_status_message("Undo error: Out of memory for snapshot lines.");
+        return;
+    }
+
+    for (int i = 0; i < E.num_lines; ++i) {
+        new_snapshot->lines[i].len = E.lines[i].len;
+        new_snapshot->lines[i].hl_open_comment = E.lines[i].hl_open_comment;
+
+        new_snapshot->lines[i].text = strdup(E.lines[i].text);
+        if (new_snapshot->lines[i].text == NULL) {
+            editor_set_status_message("Undo error: Out of memory for snapshot line text.");
+            editor_free_snapshot(new_snapshot);
+            return;
+        }
+
+        new_snapshot->lines[i].hl = malloc(E.lines[i].len);
+        if (new_snapshot->lines[i].hl == NULL) {
+            editor_set_status_message("Undo error: Out of memory for snapshot line hl.");
+            free(new_snapshot->lines[i].text);
+            editor_free_snapshot(new_snapshot);
+            return;
+        }
+        memcpy(new_snapshot->lines[i].hl, E.lines[i].hl, E.lines[i].len);
+    }
+
+    E.undo_history_len++;
+    E.undo_history_idx++;
+}
+
+void editor_undo() {
+    if (E.undo_history_idx <= 0) {
+        editor_set_status_message("Nothing to undo.");
+        return;
+    }
+
+    E.undo_history_idx--;
+
+    EditorStateSnapshot *prev_snapshot = &E.undo_history[E.undo_history_idx];
+
+    if (E.lines) {
+        for (int i = 0; i < E.num_lines; ++i) {
+            free(E.lines[i].text);
+            free(E.lines[i].hl);
+        }
+        free(E.lines);
+        E.lines = NULL;
+    }
+
+    E.num_lines = prev_snapshot->num_lines;
+    E.cx = prev_snapshot->cx;
+    E.cy = prev_snapshot->cy;
+    E.dirty = prev_snapshot->dirty;
+
+    E.lines = malloc(E.num_lines * sizeof(EditorLine));
+    if (E.lines == NULL) {
+        editor_set_status_message("Undo error: Out of memory restoring lines.");
+        return;
+    }
+
+    for (int i = 0; i < E.num_lines; ++i) {
+        E.lines[i].len = prev_snapshot->lines[i].len;
+        E.lines[i].hl_open_comment = prev_snapshot->lines[i].hl_open_comment;
+
+        E.lines[i].text = strdup(prev_snapshot->lines[i].text);
+        if (E.lines[i].text == NULL) {
+            editor_set_status_message("Undo error: Out of memory restoring line text.");
+            return;
+        }
+
+        E.lines[i].hl = malloc(prev_snapshot->lines[i].len);
+        if (E.lines[i].hl == NULL) {
+            editor_set_status_message("Undo error: Out of memory restoring line hl.");
+            free(E.lines[i].text);
+            return;
+        }
+        memcpy(E.lines[i].hl, prev_snapshot->lines[i].hl, prev_snapshot->lines[i].len);
+    }
+
+    for (int i = 0; i < E.num_lines; i++) {
+        editor_update_syntax(i);
+    }
+
+    editor_set_status_message("Undo successful.");
+    editor_refresh_screen();
+}
+
 
 void editor_read_file(const char *filename) {
     if (E.filename) free(E.filename);
@@ -285,6 +461,7 @@ void editor_read_file(const char *filename) {
             fprintf(stderr, "Error opening file '%s': %s\n", filename, strerror(errno));
             exit(1);
         }
+        editor_save_state();
         return;
     }
 
@@ -328,6 +505,7 @@ void editor_read_file(const char *filename) {
 
     E.dirty = 0;
     editor_set_status_message("Opened file: %s (%d lines)", filename, E.num_lines);
+    editor_save_state();
 }
 
 void editor_save_file() {
@@ -354,6 +532,7 @@ void editor_save_file() {
     fclose(fp);
     E.dirty = 0;
     editor_set_status_message("File saved: %s", E.filename);
+    editor_save_state();
 }
 
 void editor_draw_rows() {
@@ -569,6 +748,7 @@ void editor_move_cursor(int key) {
 }
 
 void editor_insert_char(int c) {
+    editor_save_state();
     if (E.cy == E.num_lines) {
         if (editor_insert_newline() == -1) {
             editor_set_status_message("Error: Failed to prepare new line for character insertion.");
@@ -597,6 +777,7 @@ void editor_insert_char(int c) {
 }
 
 int editor_insert_newline() {
+    editor_save_state();
     if (E.num_lines == 0) {
         E.lines = malloc(sizeof(EditorLine));
         if (E.lines == NULL) {
@@ -672,6 +853,7 @@ int editor_insert_newline() {
 
 
 void editor_del_char() {
+    editor_save_state();
     if (E.select_all_active) {
         if (E.lines) {
             for (int i = 0; i < E.num_lines; ++i) {
@@ -807,6 +989,7 @@ char *editor_prompt(const char *prompt_fmt, ...) {
 }
 
 void paste_from_clipboard() {
+    editor_save_state();
     int pipefd[2];
     pid_t pid;
     char buffer[1024];
@@ -900,11 +1083,143 @@ void handle_winch(int sig) {
     editor_refresh_screen();
 }
 
+void editor_find_next(int direction) {
+    if (E.search_query == NULL) return;
+
+    int current_row = E.last_match_row;
+    int current_col = E.last_match_col;
+
+    if (current_row == -1) { // First search or search after reset
+        current_row = E.cy;
+        current_col = E.cx;
+        E.search_direction = direction;
+    } else {
+        current_col += direction; // Move one char for next search
+    }
+
+    int query_len = strlen(E.search_query);
+    int original_row = current_row;
+    int original_col = current_col;
+
+    while (1) {
+        if (current_row < 0 || current_row >= E.num_lines) break;
+
+        EditorLine *line = &E.lines[current_row];
+        char *match = NULL;
+
+        if (direction == 1) { // Forward search
+            if (current_col >= line->len) {
+                current_row++;
+                current_col = 0;
+                continue;
+            }
+            match = strstr(line->text + current_col, E.search_query);
+        } else { // Backward search
+            if (current_col < 0) {
+                current_row--;
+                if (current_row < 0) break;
+                current_col = E.lines[current_row].len - 1;
+                continue;
+            }
+            // Manual backward search
+            for (int i = current_col; i >= 0; i--) {
+                if (i + query_len <= line->len && strncmp(line->text + i, E.search_query, query_len) == 0) {
+                    match = line->text + i;
+                    break;
+                }
+            }
+        }
+
+        if (match) {
+            E.cy = current_row;
+            E.cx = match - line->text;
+            E.last_match_row = E.cy;
+            E.last_match_col = E.cx;
+            editor_set_status_message("Found '%s' at %d:%d", E.search_query, E.cy + 1, E.cx + 1);
+            editor_refresh_screen();
+            return;
+        }
+
+        // Move to next line for forward search or previous line for backward search
+        if (direction == 1) {
+            current_row++;
+            current_col = 0;
+        } else {
+            current_row--;
+            current_col = E.lines[current_row].len - 1;
+        }
+
+        // Wrap around
+        if (current_row >= E.num_lines) {
+            current_row = 0;
+            current_col = 0;
+        } else if (current_row < 0) {
+            current_row = E.num_lines - 1;
+            current_col = E.lines[current_row].len - 1;
+        }
+
+        // If we've wrapped around and returned to the starting point, stop
+        if (current_row == original_row && current_col == original_col) {
+            break;
+        }
+    }
+    editor_set_status_message("No more matches for '%s'", E.search_query);
+    E.last_match_row = -1; // Reset last match
+    E.last_match_col = -1;
+    editor_refresh_screen();
+}
+
+void editor_find() {
+    char *query = editor_prompt("Search (Use arrows to navigate, ESC to cancel): %s",
+                                 E.search_query ? E.search_query : "");
+
+    if (query == NULL) {
+        editor_set_status_message("");
+        E.find_active = false;
+        // Re-highlight all lines to remove search highlights
+        for (int i = 0; i < E.num_lines; i++) {
+            editor_update_syntax(i);
+        }
+        editor_refresh_screen();
+        return;
+    }
+
+    if (E.search_query) {
+        if (strcmp(E.search_query, query) != 0) {
+            free(E.search_query);
+            E.search_query = query;
+            E.last_match_row = -1; // Reset search position for new query
+            E.last_match_col = -1;
+        } else {
+            free(query); // Free the newly strdup'd query if it's the same
+        }
+    } else {
+        E.search_query = query;
+        E.last_match_row = -1;
+        E.last_match_col = -1;
+    }
+
+    E.find_active = true;
+    editor_find_next(1); // Start searching forward
+}
+
+
 void editor_process_keypress() {
     int c = getch();
     bool cursor_moved = false;
     int original_cx = E.cx;
     int original_cy = E.cy;
+
+    // If find mode is active, and the key is not an arrow or Ctrl+F, exit find mode
+    if (E.find_active && c != KEY_UP && c != KEY_DOWN && c != CTRL('f')) {
+        E.find_active = false;
+        editor_set_status_message(""); // Clear find status message
+        // Re-highlight all lines to remove search highlights
+        for (int i = 0; i < E.num_lines; i++) {
+            editor_update_syntax(i);
+        }
+        editor_refresh_screen();
+    }
 
     if (E.select_all_active && c != KEY_BACKSPACE && c != 127 && c != KEY_DC) {
         E.select_all_active = 0;
@@ -940,6 +1255,14 @@ void editor_process_keypress() {
             paste_from_clipboard();
             break;
 
+        case CTRL('z'):
+            editor_undo();
+            break;
+
+        case CTRL('f'):
+            editor_find();
+            break;
+
         case KEY_BACKSPACE:
         case KEY_DC:
         case 127:
@@ -955,8 +1278,26 @@ void editor_process_keypress() {
         case KEY_END:
         case KEY_PPAGE:
         case KEY_NPAGE:
+            editor_move_cursor(c);
+            cursor_moved = true;
+            break;
+
         case KEY_UP:
+            if (E.find_active) {
+                editor_find_next(-1); // Search backward
+            } else {
+                editor_move_cursor(c);
+                cursor_moved = true;
+            }
+            break;
         case KEY_DOWN:
+            if (E.find_active) {
+                editor_find_next(1); // Search forward
+            } else {
+                editor_move_cursor(c);
+                cursor_moved = true;
+            }
+            break;
         case KEY_LEFT:
         case KEY_RIGHT:
             editor_move_cursor(c);
@@ -1165,6 +1506,21 @@ void editor_update_syntax(int filerow) {
         next_char_in_loop:;
     }
 
+    // Apply search highlighting after syntax highlighting
+    if (E.find_active && E.search_query && filerow >= E.row_offset && filerow < E.row_offset + E.screen_rows) {
+        char *match_ptr = line->text;
+        while ((match_ptr = strstr(match_ptr, E.search_query)) != NULL) {
+            int start_col = match_ptr - line->text;
+            for (int k = 0; k < strlen(E.search_query); k++) {
+                if (start_col + k < line->len) {
+                    line->hl[start_col + k] = HL_MATCH;
+                }
+            }
+            match_ptr += strlen(E.search_query);
+        }
+    }
+
+
     int changed_comment_state = (line->hl_open_comment != in_multiline_comment);
     line->hl_open_comment = in_multiline_comment;
 
@@ -1196,7 +1552,7 @@ int main(int argc, char *argv[]) {
         E.lines[0].hl_open_comment = 0;
         E.num_lines = 1;
         editor_update_syntax(0);
-        editor_set_status_message("Welcome to Nimki! Press Ctrl+Q to quit. Ctrl+S to save.");
+        editor_set_status_message("Welcome to Nimki! Press Ctrl+Q to quit. Ctrl+S to save. Ctrl+F to find.");
     }
     
     editor_refresh_screen();

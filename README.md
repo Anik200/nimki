@@ -1,4 +1,5 @@
-# Nimki <img width="512" height="512" alt="image" src="https://github.com/user-attachments/assets/86cf6327-922f-4d53-9d61-4637cfb373a4" />
+# Nimki <img width="30" height="30" alt="nimki-modified" src="https://github.com/user-attachments/assets/4a0105ec-67ad-49d3-bc9e-3e00130069b3" />
+
 
 Nimki is a simple text editor written in C.
 # Installation

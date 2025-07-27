@@ -9,7 +9,7 @@
 #include <stdarg.h>
 #include <ctype.h>
 #include <unistd.h>
-#include <sys/wait.h>
+#include <sys/wait.h> 
 #include <signal.h>
 #include <stdbool.h>
 
@@ -28,7 +28,8 @@ enum EditorHighlight {
     HL_STRING,
     HL_NUMBER,
     HL_MATCH,
-    HL_PREPROC
+    HL_PREPROC,
+    HL_SELECTION
 };
 
 typedef struct {
@@ -71,10 +72,18 @@ typedef struct {
     int undo_history_idx;
 
     char *search_query;
-    int search_direction; // 1 for forward, -1 for backward
+    int search_direction;
     int last_match_row;
     int last_match_col;
     bool find_active;
+
+    bool selection_active;
+    int selection_start_cy, selection_start_cx;
+    int selection_end_cy, selection_end_cx;
+
+    bool context_menu_active;
+    int context_menu_x, context_menu_y;
+    int context_menu_selected_option;
 } EditorConfig;
 
 EditorConfig E;
@@ -223,6 +232,9 @@ void editor_save_state();
 void editor_undo();
 void editor_find();
 void editor_find_next(int direction);
+void editor_copy_selection_to_clipboard();
+void editor_select_all();
+void editor_draw_context_menu();
 
 
 void init_editor() {
@@ -252,10 +264,24 @@ void init_editor() {
     E.last_match_col = -1;
     E.find_active = false;
 
+    E.selection_active = false;
+    E.selection_start_cy = 0;
+    E.selection_start_cx = 0;
+    E.selection_end_cy = 0;
+    E.selection_end_cx = 0;
+
+    E.context_menu_active = false;
+    E.context_menu_x = 0;
+    E.context_menu_y = 0;
+    E.context_menu_selected_option = 0;
+
+
     initscr();
     raw();
     noecho();
     keypad(stdscr, TRUE);
+
+    mousemask(ALL_MOUSE_EVENTS | REPORT_MOUSE_POSITION, NULL);
 
     signal(SIGWINCH, handle_winch);
 
@@ -273,16 +299,17 @@ void init_editor() {
         init_pair(HL_NUMBER, COLOR_RED, COLOR_BLACK);
         init_pair(HL_MATCH, COLOR_BLACK, COLOR_YELLOW);
         init_pair(HL_PREPROC, COLOR_BLUE, COLOR_BLACK);
+        init_pair(HL_SELECTION, COLOR_WHITE, COLOR_BLUE);
     }
-
-    mousemask(ALL_MOUSE_EVENTS | REPORT_MOUSE_POSITION, NULL);
 }
 
 void editor_free_snapshot(EditorStateSnapshot *snapshot) {
     if (snapshot->lines) {
         for (int i = 0; i < snapshot->num_lines; ++i) {
             free(snapshot->lines[i].text);
+            snapshot->lines[i].text = NULL;
             free(snapshot->lines[i].hl);
+            snapshot->lines[i].hl = NULL;
         }
         free(snapshot->lines);
         snapshot->lines = NULL;
@@ -299,20 +326,27 @@ void cleanup_editor() {
     if (E.lines) {
         for (int i = 0; i < E.num_lines; ++i) {
             free(E.lines[i].text);
+            E.lines[i].text = NULL;
             free(E.lines[i].hl);
+            E.lines[i].hl = NULL;
         }
         free(E.lines);
+        E.lines = NULL;
     }
     if (E.filename) {
         free(E.filename);
+        E.filename = NULL;
     }
     if (E.search_query) {
         free(E.search_query);
+        E.search_query = NULL;
     }
 
-    for (int i = 0; i < E.undo_history_len; ++i) {
+    for (int i = 0; i < MAX_UNDO_STATES; ++i) {
         editor_free_snapshot(&E.undo_history[i]);
     }
+    E.undo_history_len = 0;
+    E.undo_history_idx = 0;
 }
 
 void editor_save_state() {
@@ -380,7 +414,9 @@ void editor_undo() {
     if (E.lines) {
         for (int i = 0; i < E.num_lines; ++i) {
             free(E.lines[i].text);
+            E.lines[i].text = NULL;
             free(E.lines[i].hl);
+            E.lines[i].hl = NULL;
         }
         free(E.lines);
         E.lines = NULL;
@@ -404,6 +440,13 @@ void editor_undo() {
         E.lines[i].text = strdup(prev_snapshot->lines[i].text);
         if (E.lines[i].text == NULL) {
             editor_set_status_message("Undo error: Out of memory restoring line text.");
+            for (int j = 0; j < i; ++j) {
+                free(E.lines[j].text);
+                free(E.lines[j].hl);
+            }
+            free(E.lines);
+            E.lines = NULL;
+            E.num_lines = 0;
             return;
         }
 
@@ -411,6 +454,13 @@ void editor_undo() {
         if (E.lines[i].hl == NULL) {
             editor_set_status_message("Undo error: Out of memory restoring line hl.");
             free(E.lines[i].text);
+            for (int j = 0; j < i; ++j) {
+                free(E.lines[j].text);
+                free(E.lines[j].hl);
+            }
+            free(E.lines);
+            E.lines = NULL;
+            E.num_lines = 0;
             return;
         }
         memcpy(E.lines[i].hl, prev_snapshot->lines[i].hl, prev_snapshot->lines[i].len);
@@ -426,7 +476,10 @@ void editor_undo() {
 
 
 void editor_read_file(const char *filename) {
-    if (E.filename) free(E.filename);
+    if (E.filename) {
+        free(E.filename);
+        E.filename = NULL;
+    }
     E.filename = strdup(filename);
     if (E.filename == NULL) {
         cleanup_editor();
@@ -447,6 +500,8 @@ void editor_read_file(const char *filename) {
             }
             E.lines[0].text = strdup("");
             if (E.lines[0].text == NULL) {
+                free(E.lines);
+                E.lines = NULL;
                 cleanup_editor();
                 fprintf(stderr, "Fatal error: out of memory (initial line text).\n");
                 exit(1);
@@ -468,6 +523,16 @@ void editor_read_file(const char *filename) {
     char *line_buffer = NULL;
     size_t linecap = 0;
     ssize_t linelen;
+
+    if (E.lines) {
+        for (int i = 0; i < E.num_lines; ++i) {
+            free(E.lines[i].text);
+            free(E.lines[i].hl);
+        }
+        free(E.lines);
+        E.lines = NULL;
+        E.num_lines = 0;
+    }
 
     while ((linelen = getline(&line_buffer, &linecap, fp)) != -1) {
         while (linelen > 0 && (line_buffer[linelen - 1] == '\n' || line_buffer[linelen - 1] == '\r')) {
@@ -499,6 +564,27 @@ void editor_read_file(const char *filename) {
     free(line_buffer);
     fclose(fp);
 
+    if (E.num_lines == 0) {
+        E.lines = malloc(sizeof(EditorLine));
+        if (E.lines == NULL) {
+            cleanup_editor();
+            fprintf(stderr, "Fatal error: out of memory (empty file init after read).\n");
+            exit(1);
+        }
+        E.lines[0].text = strdup("");
+        if (E.lines[0].text == NULL) {
+            free(E.lines);
+            E.lines = NULL;
+            cleanup_editor();
+            fprintf(stderr, "Fatal error: out of memory (empty file text after read).\n");
+            exit(1);
+        }
+        E.lines[0].len = 0;
+        E.lines[0].hl = NULL;
+        E.lines[0].hl_open_comment = 0;
+        E.num_lines = 1;
+    }
+
     for (int i = 0; i < E.num_lines; i++) {
         editor_update_syntax(i);
     }
@@ -515,7 +601,10 @@ void editor_save_file() {
             editor_set_status_message("Save cancelled.");
             return;
         }
-        if (E.filename) free(E.filename);
+        if (E.filename) {
+            free(E.filename);
+            E.filename = NULL;
+        }
         E.filename = new_filename;
         editor_select_syntax_highlight();
     }
@@ -540,11 +629,28 @@ void editor_draw_rows() {
     for (y = 0; y < E.screen_rows; y++) {
         int filerow = y + E.row_offset;
 
+        move(y, 0);
+        clrtoeol();
+
         if (filerow >= E.num_lines) {
         } else {
             EditorLine *line = &E.lines[filerow];
             int current_color_pair = HL_NORMAL;
             int display_col = 0;
+
+            int sel_min_cy = E.selection_start_cy;
+            int sel_min_cx = E.selection_start_cx;
+            int sel_max_cy = E.selection_end_cy;
+            int sel_max_cx = E.selection_end_cx;
+
+            if (sel_min_cy > sel_max_cy || (sel_min_cy == sel_max_cy && sel_min_cx > sel_max_cx)) {
+                int temp_cy = sel_min_cy;
+                int temp_cx = sel_min_cx;
+                sel_min_cy = sel_max_cy;
+                sel_min_cx = sel_max_cx;
+                sel_max_cy = temp_cy;
+                sel_max_cx = temp_cx;
+            }
 
             for (int i = 0; i < line->len; i++) {
                 int char_display_width = 1;
@@ -559,12 +665,41 @@ void editor_draw_rows() {
 
                 if ((display_col - E.col_offset) >= E.screen_cols) break;
 
-                if (E_syntax && has_colors()) {
-                    int hl_type = line->hl[i];
-                    if (hl_type != current_color_pair) {
+                bool is_selected = false;
+                if (E.selection_active) {
+                    if (filerow >= sel_min_cy && filerow <= sel_max_cy) {
+                        if (filerow == sel_min_cy && filerow == sel_max_cy) {
+                            if (i >= sel_min_cx && i < sel_max_cx) {
+                                is_selected = true;
+                            }
+                        } else if (filerow == sel_min_cy) {
+                            if (i >= sel_min_cx) {
+                                is_selected = true;
+                            }
+                        } else if (filerow == sel_max_cy) {
+                            if (i < sel_max_cx) {
+                                is_selected = true;
+                            }
+                        } else {
+                            is_selected = true;
+                        }
+                    }
+                }
+
+                if (is_selected && has_colors()) {
+                    if (HL_SELECTION != current_color_pair) {
                         attroff(COLOR_PAIR(current_color_pair));
-                        current_color_pair = hl_type;
+                        current_color_pair = HL_SELECTION;
                         attron(COLOR_PAIR(current_color_pair));
+                    }
+                } else {
+                    if (E_syntax && has_colors()) {
+                        int hl_type = line->hl[i];
+                        if (hl_type != current_color_pair) {
+                            attroff(COLOR_PAIR(current_color_pair));
+                            current_color_pair = hl_type;
+                            attron(COLOR_PAIR(current_color_pair));
+                        }
                     }
                 }
 
@@ -581,7 +716,6 @@ void editor_draw_rows() {
                 attroff(COLOR_PAIR(current_color_pair));
             }
         }
-        clrtoeol();
     }
 }
 
@@ -663,15 +797,14 @@ void editor_scroll() {
 void editor_refresh_screen() {
     editor_scroll();
 
-    clear();
-
     editor_draw_rows();
     editor_draw_status_bar();
     editor_draw_message_bar();
     editor_draw_clock();
+    editor_draw_context_menu();
 
     move(E.cy - E.row_offset, get_cx_display() - E.col_offset);
-    refresh();
+    doupdate();
 }
 
 int get_cx_display() {
@@ -854,13 +987,17 @@ int editor_insert_newline() {
 
 void editor_del_char() {
     editor_save_state();
+
     if (E.select_all_active) {
         if (E.lines) {
             for (int i = 0; i < E.num_lines; ++i) {
                 free(E.lines[i].text);
+                E.lines[i].text = NULL;
                 free(E.lines[i].hl);
+                E.lines[i].hl = NULL;
             }
             free(E.lines);
+            E.lines = NULL;
         }
         E.lines = malloc(sizeof(EditorLine));
         if (E.lines == NULL) {
@@ -886,6 +1023,132 @@ void editor_del_char() {
         editor_set_status_message("All text deleted.");
         return;
     }
+
+    if (E.selection_active) {
+        int sel_min_cy = E.selection_start_cy;
+        int sel_min_cx = E.selection_start_cx;
+        int sel_max_cy = E.selection_end_cy;
+        int sel_max_cx = E.selection_end_cx;
+
+        if (sel_min_cy > sel_max_cy || (sel_min_cy == sel_max_cy && sel_min_cx > sel_max_cx)) {
+            int temp_cy = sel_min_cy;
+            int temp_cx = sel_min_cx;
+            sel_min_cy = sel_max_cy;
+            sel_min_cx = sel_max_cx;
+            sel_max_cy = temp_cy;
+            sel_max_cx = temp_cx;
+        }
+
+        if (sel_min_cy == sel_max_cy && sel_min_cx == sel_max_cx) {
+            E.selection_active = false;
+            editor_set_status_message("No text selected for deletion.");
+            return;
+        }
+
+        int target_cy = sel_min_cy;
+        int target_cx = sel_min_cx;
+
+        int new_num_lines = E.num_lines - (sel_max_cy - sel_min_cy);
+        if (new_num_lines == 0) {
+            if (E.lines) {
+                for (int i = 0; i < E.num_lines; ++i) {
+                    free(E.lines[i].text);
+                    E.lines[i].text = NULL;
+                    free(E.lines[i].hl);
+                    E.lines[i].hl = NULL;
+                }
+                free(E.lines);
+                E.lines = NULL;
+            }
+            E.lines = malloc(sizeof(EditorLine));
+            if (E.lines == NULL) {
+                editor_set_status_message("Fatal error: Out of memory (empty file init after sel del).");
+                exit(1);
+            }
+            E.lines[0].text = strdup("");
+            if (E.lines[0].text == NULL) {
+                free(E.lines);
+                E.lines = NULL;
+                editor_set_status_message("Fatal error: Out of memory (empty file text after sel del).");
+                exit(1);
+            }
+            E.lines[0].len = 0;
+            E.lines[0].hl = NULL;
+            E.lines[0].hl_open_comment = 0;
+            E.num_lines = 1;
+            E.cx = 0;
+            E.cy = 0;
+        } else {
+            EditorLine *new_lines = malloc(new_num_lines * sizeof(EditorLine));
+            if (new_lines == NULL) {
+                editor_set_status_message("Error: Out of memory for new lines array during deletion.");
+                return;
+            }
+
+            int current_new_line_idx = 0;
+
+            for (int r = 0; r < sel_min_cy; r++) {
+                new_lines[current_new_line_idx++] = E.lines[r];
+            }
+
+            EditorLine *start_line_orig = &E.lines[sel_min_cy];
+            EditorLine *end_line_orig = &E.lines[sel_max_cy];
+
+            size_t merged_len = sel_min_cx + (end_line_orig->len - sel_max_cx);
+            char *merged_text = malloc(merged_len + 1);
+            if (merged_text == NULL) {
+                editor_set_status_message("Error: Out of memory for merged text.");
+                free(new_lines);
+                return;
+            }
+            memcpy(merged_text, start_line_orig->text, sel_min_cx);
+            memcpy(merged_text + sel_min_cx, end_line_orig->text + sel_max_cx, end_line_orig->len - sel_max_cx);
+            merged_text[merged_len] = '\0';
+
+            new_lines[current_new_line_idx].text = merged_text;
+            new_lines[current_new_line_idx].len = merged_len;
+            new_lines[current_new_line_idx].hl = NULL;
+            new_lines[current_new_line_idx].hl_open_comment = 0;
+            current_new_line_idx++;
+
+            for (int r = sel_max_cy + 1; r < E.num_lines; r++) {
+                new_lines[current_new_line_idx++] = E.lines[r];
+            }
+
+            for (int r = sel_min_cy; r <= sel_max_cy; r++) {
+                if (r != sel_min_cy || (r == sel_min_cy && sel_min_cy != sel_max_cy)) {
+                    free(E.lines[r].text);
+                    E.lines[r].text = NULL;
+                    free(E.lines[r].hl);
+                    E.lines[r].hl = NULL;
+                }
+            }
+            if (sel_min_cy != sel_max_cy) {
+                free(start_line_orig->text);
+                start_line_orig->text = NULL;
+                free(start_line_orig->hl);
+                start_line_orig->hl = NULL;
+            }
+
+
+            free(E.lines);
+            E.lines = NULL;
+
+            E.lines = new_lines;
+            E.num_lines = new_num_lines;
+            E.cx = target_cx;
+            E.cy = target_cy;
+        }
+
+        E.selection_active = false;
+        E.dirty = 1;
+        editor_set_status_message("Selected text deleted.");
+        for (int i = target_cy; i < E.num_lines; i++) {
+            editor_update_syntax(i);
+        }
+        return;
+    }
+
 
     if (E.cy == E.num_lines || E.num_lines == 0) return;
     if (E.cx == 0 && E.cy == 0 && E.lines[0].len == 0) return;
@@ -915,27 +1178,35 @@ void editor_del_char() {
             prev_line->text[prev_line->len] = '\0';
 
             free(line->text);
+            line->text = NULL;
             free(line->hl);
+            line->hl = NULL;
 
             memmove(&E.lines[E.cy], &E.lines[E.cy + 1], (E.num_lines - E.cy - 1) * sizeof(EditorLine));
             E.num_lines--;
-            E.lines = realloc(E.lines, E.num_lines * sizeof(EditorLine));
-            if (E.num_lines > 0 && E.lines == NULL) {
-                editor_set_status_message("Error: Out of memory shrinking lines realloc.");
-                return;
-            }
-
-            if (E.num_lines == 0) {
+            
+            if (E.num_lines > 0) {
+                EditorLine *new_lines_ptr = realloc(E.lines, E.num_lines * sizeof(EditorLine));
+                if (new_lines_ptr == NULL) {
+                    editor_set_status_message("Error: Out of memory shrinking lines realloc. Data might be inconsistent.");
+                } else {
+                    E.lines = new_lines_ptr;
+                }
+            } else {
+                if (E.lines) {
+                    free(E.lines);
+                    E.lines = NULL;
+                }
                 E.lines = malloc(sizeof(EditorLine));
                 if (E.lines == NULL) {
-                    editor_set_status_message("Fatal error: Out of memory (empty file init).");
+                    editor_set_status_message("Fatal error: Out of memory (empty file init after single del).");
                     exit(1);
                 }
                 E.lines[0].text = strdup("");
                 if (E.lines[0].text == NULL) {
                     free(E.lines);
                     E.lines = NULL;
-                    editor_set_status_message("Fatal error: Out of memory (empty file text).");
+                    editor_set_status_message("Fatal error: Out of memory (empty file text after single del).");
                     exit(1);
                 }
                 E.lines[0].len = 0;
@@ -945,12 +1216,14 @@ void editor_del_char() {
                 E.cx = 0;
                 E.cy = 0;
                 editor_update_syntax(0);
-            } else {
-                E.cx = prev_line->len;
-                E.cy--;
-                editor_update_syntax(E.cy);
+                E.dirty = 1;
+                return;
             }
+
+            E.cx = prev_line->len;
+            E.cy--;
             E.dirty = 1;
+            editor_update_syntax(E.cy);
         }
     }
 }
@@ -1074,6 +1347,160 @@ void paste_from_clipboard() {
     }
 }
 
+void editor_copy_selection_to_clipboard() {
+    if (!E.selection_active) {
+        editor_set_status_message("No text selected to copy.");
+        return;
+    }
+
+    int sel_min_cy = E.selection_start_cy;
+    int sel_min_cx = E.selection_start_cx;
+    int sel_max_cy = E.selection_end_cy;
+    int sel_max_cx = E.selection_end_cx;
+
+    if (sel_min_cy > sel_max_cy || (sel_min_cy == sel_max_cy && sel_min_cx > sel_max_cx)) {
+        int temp_cy = sel_min_cy;
+        int temp_cx = sel_min_cx;
+        sel_min_cy = sel_max_cy;
+        sel_min_cx = sel_max_cx;
+        sel_max_cy = temp_cy;
+        sel_max_cx = temp_cx;
+    }
+
+    size_t total_len = 0;
+    for (int r = sel_min_cy; r <= sel_max_cy; r++) {
+        if (r < 0 || r >= E.num_lines) continue;
+
+        EditorLine *line = &E.lines[r];
+        int start_col = (r == sel_min_cy) ? sel_min_cx : 0;
+        int end_col = (r == sel_max_cy) ? sel_max_cx : line->len;
+
+        if (end_col > line->len) end_col = line->len;
+        if (start_col < 0) start_col = 0;
+
+        if (end_col > start_col) {
+            total_len += (end_col - start_col);
+        }
+        if (r < sel_max_cy) {
+            total_len += 1;
+        }
+    }
+
+    if (total_len == 0) {
+        editor_set_status_message("No text selected to copy.");
+        return;
+    }
+
+    char *selected_text = malloc(total_len + 1);
+    if (selected_text == NULL) {
+        editor_set_status_message("Copy error: Out of memory for selected text.");
+        return;
+    }
+    selected_text[0] = '\0';
+    size_t current_offset = 0;
+
+    for (int r = sel_min_cy; r <= sel_max_cy; r++) {
+        if (r < 0 || r >= E.num_lines) continue;
+
+        EditorLine *line = &E.lines[r];
+        int start_col = (r == sel_min_cy) ? sel_min_cx : 0;
+        int end_col = (r == sel_max_cy) ? sel_max_cx : line->len;
+
+        if (end_col > line->len) end_col = line->len;
+        if (start_col < 0) start_col = 0;
+
+        if (end_col > start_col) {
+            size_t segment_len = end_col - start_col;
+            memcpy(selected_text + current_offset, line->text + start_col, segment_len);
+            current_offset += segment_len;
+        }
+        if (r < sel_max_cy) {
+            selected_text[current_offset++] = '\n';
+        }
+    }
+    selected_text[current_offset] = '\0';
+
+    int pipefd[2];
+    pid_t pid;
+    char *clipboard_tool = NULL;
+    char *argv[4];
+
+    if (getenv("XDG_SESSION_TYPE") != NULL && strcmp(getenv("XDG_SESSION_TYPE"), "wayland") == 0) {
+        if (access("/usr/bin/wl-copy", X_OK) == 0 || access("/bin/wl-copy", X_OK) == 0) {
+            clipboard_tool = "wl-copy";
+            argv[0] = "wl-copy";
+            argv[1] = NULL;
+        }
+    }
+    
+    if (clipboard_tool == NULL) {
+        if (access("/usr/bin/xclip", X_OK) == 0 || access("/bin/xclip", X_OK) == 0) {
+            clipboard_tool = "xclip";
+            argv[0] = "xclip";
+            argv[1] = "-selection";
+            argv[2] = "clipboard";
+            argv[3] = NULL;
+        }
+    }
+
+    if (clipboard_tool == NULL) {
+        editor_set_status_message("Copy error: Neither wl-copy nor xclip found. Please install one.");
+        free(selected_text);
+        return;
+    }
+
+    editor_set_status_message("Attempting to copy using %s...", clipboard_tool);
+    editor_refresh_screen();
+
+    fflush(stdout);
+
+    if (pipe(pipefd) == -1) {
+        editor_set_status_message("Copy error: Failed to create pipe.");
+        free(selected_text);
+        return;
+    }
+
+    pid = fork();
+    if (pid == -1) {
+        editor_set_status_message("Copy error: Failed to fork process.");
+        close(pipefd[0]);
+        close(pipefd[1]);
+        free(selected_text);
+        return;
+    }
+
+    if (pid == 0) {
+        close(pipefd[0]);
+        dup2(pipefd[1], STDIN_FILENO);
+        close(pipefd[1]);
+
+        execvp(clipboard_tool, argv);
+        _exit(1);
+    } else {
+        close(pipefd[0]);
+
+        write(pipefd[1], selected_text, current_offset);
+        close(pipefd[1]);
+
+        int status;
+        waitpid(pid, &status, 0);
+
+        if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+            editor_set_status_message("Copied %zu bytes to clipboard using %s.", current_offset, clipboard_tool);
+        } else {
+            editor_set_status_message("Copy error: %s failed or returned an error.", clipboard_tool);
+        }
+    }
+    free(selected_text);
+    selected_text = NULL;
+    E.selection_active = false;
+    for (int i = 0; i < E.num_lines; i++) {
+        editor_update_syntax(i);
+    }
+    editor_refresh_screen();
+}
+
+
 void handle_winch(int sig) {
     (void)sig;
     endwin();
@@ -1089,12 +1516,12 @@ void editor_find_next(int direction) {
     int current_row = E.last_match_row;
     int current_col = E.last_match_col;
 
-    if (current_row == -1) { // First search or search after reset
+    if (current_row == -1) {
         current_row = E.cy;
         current_col = E.cx;
         E.search_direction = direction;
     } else {
-        current_col += direction; // Move one char for next search
+        current_col += direction;
     }
 
     int query_len = strlen(E.search_query);
@@ -1107,21 +1534,20 @@ void editor_find_next(int direction) {
         EditorLine *line = &E.lines[current_row];
         char *match = NULL;
 
-        if (direction == 1) { // Forward search
+        if (direction == 1) {
             if (current_col >= line->len) {
                 current_row++;
                 current_col = 0;
                 continue;
             }
             match = strstr(line->text + current_col, E.search_query);
-        } else { // Backward search
+        } else {
             if (current_col < 0) {
                 current_row--;
                 if (current_row < 0) break;
                 current_col = E.lines[current_row].len - 1;
                 continue;
             }
-            // Manual backward search
             for (int i = current_col; i >= 0; i--) {
                 if (i + query_len <= line->len && strncmp(line->text + i, E.search_query, query_len) == 0) {
                     match = line->text + i;
@@ -1140,7 +1566,6 @@ void editor_find_next(int direction) {
             return;
         }
 
-        // Move to next line for forward search or previous line for backward search
         if (direction == 1) {
             current_row++;
             current_col = 0;
@@ -1149,7 +1574,6 @@ void editor_find_next(int direction) {
             current_col = E.lines[current_row].len - 1;
         }
 
-        // Wrap around
         if (current_row >= E.num_lines) {
             current_row = 0;
             current_col = 0;
@@ -1158,13 +1582,12 @@ void editor_find_next(int direction) {
             current_col = E.lines[current_row].len - 1;
         }
 
-        // If we've wrapped around and returned to the starting point, stop
         if (current_row == original_row && current_col == original_col) {
             break;
         }
     }
     editor_set_status_message("No more matches for '%s'", E.search_query);
-    E.last_match_row = -1; // Reset last match
+    E.last_match_row = -1;
     E.last_match_col = -1;
     editor_refresh_screen();
 }
@@ -1176,7 +1599,6 @@ void editor_find() {
     if (query == NULL) {
         editor_set_status_message("");
         E.find_active = false;
-        // Re-highlight all lines to remove search highlights
         for (int i = 0; i < E.num_lines; i++) {
             editor_update_syntax(i);
         }
@@ -1188,10 +1610,10 @@ void editor_find() {
         if (strcmp(E.search_query, query) != 0) {
             free(E.search_query);
             E.search_query = query;
-            E.last_match_row = -1; // Reset search position for new query
+            E.last_match_row = -1;
             E.last_match_col = -1;
         } else {
-            free(query); // Free the newly strdup'd query if it's the same
+            free(query);
         }
     } else {
         E.search_query = query;
@@ -1200,21 +1622,175 @@ void editor_find() {
     }
 
     E.find_active = true;
-    editor_find_next(1); // Start searching forward
+    editor_find_next(1);
+}
+
+void editor_select_all() {
+    E.selection_active = true;
+    E.selection_start_cy = 0;
+    E.selection_start_cx = 0;
+    E.selection_end_cy = E.num_lines > 0 ? E.num_lines - 1 : 0;
+    E.selection_end_cx = E.num_lines > 0 ? E.lines[E.selection_end_cy].len : 0;
+    editor_set_status_message("All text selected.");
+    for (int i = 0; i < E.num_lines; i++) {
+        editor_update_syntax(i);
+    }
+    editor_refresh_screen();
+}
+
+void editor_draw_context_menu() {
+    if (!E.context_menu_active) return;
+
+    const char *options[] = {"Copy", "Select All", NULL};
+    int num_options = 0;
+    for (int i = 0; options[i] != NULL; i++) {
+        num_options++;
+    }
+
+    int menu_width = 0;
+    for (int i = 0; options[i] != NULL; i++) {
+        if (strlen(options[i]) > menu_width) {
+            menu_width = strlen(options[i]);
+        }
+    }
+    menu_width += 4;
+
+    int menu_height = num_options + 2;
+
+    int start_x = E.context_menu_x;
+    int start_y = E.context_menu_y;
+
+    if (start_x + menu_width >= E.screen_cols) {
+        start_x = E.screen_cols - menu_width - 1;
+    }
+    if (start_y + menu_height >= E.screen_rows + 2) {
+        start_y = E.screen_rows + 2 - menu_height -1;
+    }
+    if (start_x < 0) start_x = 0;
+    if (start_y < 0) start_y = 0;
+
+
+    attron(A_REVERSE);
+    for (int y = 0; y < menu_height; y++) {
+        mvhline(start_y + y, start_x, ' ', menu_width);
+    }
+    attroff(A_REVERSE);
+
+    for (int i = 0; i < num_options; i++) {
+        if (i == E.context_menu_selected_option) {
+            attron(A_REVERSE | A_BOLD);
+        } else {
+            attron(A_REVERSE);
+        }
+        mvprintw(start_y + 1 + i, start_x + 2, "%s", options[i]);
+        attroff(A_REVERSE | A_BOLD);
+    }
 }
 
 
 void editor_process_keypress() {
+    MEVENT event;
     int c = getch();
     bool cursor_moved = false;
     int original_cx = E.cx;
     int original_cy = E.cy;
 
-    // If find mode is active, and the key is not an arrow or Ctrl+F, exit find mode
+    if (E.context_menu_active) {
+        switch (c) {
+            case KEY_UP:
+                E.context_menu_selected_option--;
+                if (E.context_menu_selected_option < 0) {
+                    E.context_menu_selected_option = 1;
+                }
+                break;
+            case KEY_DOWN:
+                E.context_menu_selected_option++;
+                if (E.context_menu_selected_option > 1) {
+                    E.context_menu_selected_option = 0;
+                }
+                break;
+            case '\n':
+            case '\r':
+            case KEY_ENTER:
+                if (E.context_menu_selected_option == 0) {
+                    editor_copy_selection_to_clipboard();
+                } else if (E.context_menu_selected_option == 1) {
+                    editor_select_all();
+                }
+                editor_set_status_message("");
+                break;
+            case 27: // ESC key
+                E.context_menu_active = false;
+                editor_set_status_message("");
+                break;
+            case KEY_MOUSE:
+                if (getmouse(&event) == OK) {
+                    if (event.bstate & BUTTON1_PRESSED || event.bstate & BUTTON1_CLICKED) {
+                        const char *options[] = {"Copy", "Select All", NULL};
+                        int num_options = 0;
+                        for (int i = 0; options[i] != NULL; i++) {
+                            num_options++;
+                        }
+                        int menu_width = 0;
+                        for (int i = 0; options[i] != NULL; i++) {
+                            if (strlen(options[i]) > menu_width) {
+                                menu_width = strlen(options[i]);
+                            }
+                        }
+                        menu_width += 4;
+
+                        int start_x = E.context_menu_x;
+                        int start_y = E.context_menu_y;
+
+                        if (start_x + menu_width >= E.screen_cols) {
+                            start_x = E.screen_cols - menu_width - 1;
+                        }
+                        if (start_y + num_options + 2 >= E.screen_rows + 2) {
+                            start_y = E.screen_rows + 2 - (num_options + 2) -1;
+                        }
+                        if (start_x < 0) start_x = 0;
+                        if (start_y < 0) start_y = 0;
+
+                        if (event.x >= start_x && event.x < start_x + menu_width &&
+                            event.y >= start_y + 1 && event.y < start_y + 1 + num_options) {
+                            int clicked_option = event.y - (start_y + 1);
+                            if (clicked_option == 0) {
+                                editor_copy_selection_to_clipboard();
+                            } else if (clicked_option == 1) {
+                                editor_select_all();
+                            }
+                        } else { // Clicked outside menu
+                             E.context_menu_active = false;
+                             editor_set_status_message("");
+                        }
+                    }
+                }
+                break; // Break after mouse handling
+            default:
+                // Do nothing, menu stays active
+                break;
+        }
+        editor_refresh_screen();
+        return;
+    }
+
+    bool current_key_is_selection_or_cursor_move = (c == CTRL('k') || c == KEY_UP || c == KEY_DOWN ||
+                                                     c == KEY_LEFT || c == KEY_RIGHT || c == KEY_HOME ||
+                                                     c == KEY_END || c == KEY_PPAGE || c == KEY_NPAGE);
+
+    if (E.selection_active && !current_key_is_selection_or_cursor_move &&
+        !(c == KEY_BACKSPACE || c == KEY_DC || c == 127)) {
+        E.selection_active = false;
+        editor_set_status_message("");
+        for (int i = 0; i < E.num_lines; i++) {
+            editor_update_syntax(i);
+        }
+        editor_refresh_screen();
+    }
+
     if (E.find_active && c != KEY_UP && c != KEY_DOWN && c != CTRL('f')) {
         E.find_active = false;
-        editor_set_status_message(""); // Clear find status message
-        // Re-highlight all lines to remove search highlights
+        editor_set_status_message("");
         for (int i = 0; i < E.num_lines; i++) {
             editor_update_syntax(i);
         }
@@ -1244,10 +1820,7 @@ void editor_process_keypress() {
             break;
 
         case CTRL('a'):
-            E.select_all_active = 1;
-            E.cx = 0;
-            E.cy = 0;
-            editor_set_status_message("All text selected. Press Backspace to delete.");
+            editor_select_all();
             cursor_moved = true;
             break;
 
@@ -1263,13 +1836,27 @@ void editor_process_keypress() {
             editor_find();
             break;
 
+        case CTRL('k'):
+            if (!E.selection_active) {
+                E.selection_active = true;
+                E.selection_start_cy = E.cy;
+                E.selection_start_cx = E.cx;
+                E.selection_end_cy = E.cy;
+                E.selection_end_cx = E.cx;
+                editor_set_status_message("Selection mode active. Move cursor to select. Press Ctrl+K again to copy.");
+            } else {
+                editor_copy_selection_to_clipboard();
+            }
+            cursor_moved = true;
+            break;
+
         case KEY_BACKSPACE:
         case KEY_DC:
         case 127:
             editor_del_char();
             break;
 
-        case '\t': // Handle Tab key
+        case '\t':
             editor_insert_char('\t');
             break;
 
@@ -1282,78 +1869,67 @@ void editor_process_keypress() {
         case KEY_END:
         case KEY_PPAGE:
         case KEY_NPAGE:
-            editor_move_cursor(c);
-            cursor_moved = true;
-            break;
-
         case KEY_UP:
-            if (E.find_active) {
-                editor_find_next(-1); // Search backward
-            } else {
-                editor_move_cursor(c);
-                cursor_moved = true;
-            }
-            break;
         case KEY_DOWN:
-            if (E.find_active) {
-                editor_find_next(1); // Search forward
-            } else {
-                editor_move_cursor(c);
-                cursor_moved = true;
-            }
-            break;
         case KEY_LEFT:
         case KEY_RIGHT:
             editor_move_cursor(c);
             cursor_moved = true;
+            if (E.selection_active) {
+                E.selection_end_cy = E.cy;
+                E.selection_end_cx = E.cx;
+            }
             break;
 
         case KEY_MOUSE:
-            {
-                MEVENT event;
-                if (getmouse(&event) == OK) {
-                    if (event.bstate & BUTTON1_CLICKED) {
-                        E.cy = event.y + E.row_offset;
-                        
-                        int target_display_cx = event.x + E.col_offset;
-                        int actual_cx = 0;
-                        if (E.cy < E.num_lines) {
-                            EditorLine *line = &E.lines[E.cy];
-                            int current_display_cx = 0;
-                            for (int char_idx = 0; char_idx < line->len; char_idx++) {
-                                int char_display_width = 1;
-                                if (line->text[char_idx] == '\t') {
-                                    char_display_width = TAB_STOP - (current_display_cx % TAB_STOP);
-                                }
-                                if (current_display_cx + char_display_width > target_display_cx) {
-                                    break;
-                                }
-                                current_display_cx += char_display_width;
-                                actual_cx = char_idx + 1;
+            if (getmouse(&event) == OK) {
+                if (event.bstate & BUTTON3_PRESSED) {
+                    E.context_menu_active = true;
+                    E.context_menu_x = event.x;
+                    E.context_menu_y = event.y;
+                    E.context_menu_selected_option = 0;
+                    editor_set_status_message("");
+                } else if (event.bstate & BUTTON1_PRESSED || event.bstate & BUTTON1_CLICKED) {
+                    E.cy = event.y + E.row_offset;
+                    
+                    int target_display_cx = event.x + E.col_offset;
+                    int actual_cx = 0;
+                    if (E.cy < E.num_lines) {
+                        EditorLine *line = &E.lines[E.cy];
+                        int current_display_cx = 0;
+                        for (int char_idx = 0; char_idx < line->len; char_idx++) {
+                            int char_display_width = 1;
+                            if (line->text[char_idx] == '\t') {
+                                char_display_width = TAB_STOP - (current_display_cx % TAB_STOP);
                             }
+                            if (current_display_cx + char_display_width > target_display_cx) {
+                                break;
+                            }
+                            current_display_cx += char_display_width;
+                            actual_cx = char_idx + 1;
                         }
-                        E.cx = actual_cx;
-
-                        if (E.cy >= E.num_lines) {
-                            E.cy = E.num_lines > 0 ? E.num_lines - 1 : 0;
-                        }
-                        EditorLine *line = (E.cy < E.num_lines) ? &E.lines[E.cy] : NULL;
-                        int line_len = line ? line->len : 0;
-                        if (E.cx > line_len) {
-                            E.cx = line_len;
-                        }
-                        cursor_moved = true;
-                    } else if (event.bstate & BUTTON4_PRESSED) {
-                        for (int i = 0; i < 3; ++i) {
-                            editor_move_cursor(KEY_UP);
-                        }
-                        cursor_moved = true;
-                    } else if (event.bstate & BUTTON5_PRESSED) {
-                        for (int i = 0; i < 3; ++i) {
-                            editor_move_cursor(KEY_DOWN);
-                        }
-                        cursor_moved = true;
                     }
+                    E.cx = actual_cx;
+
+                    if (E.cy >= E.num_lines) {
+                        E.cy = E.num_lines > 0 ? E.num_lines - 1 : 0;
+                    }
+                    EditorLine *line = (E.cy < E.num_lines) ? &E.lines[E.cy] : NULL;
+                    int line_len = line ? line->len : 0;
+                    if (E.cx > line_len) {
+                        E.cx = line_len;
+                    }
+                    cursor_moved = true;
+                } else if (event.bstate & BUTTON4_PRESSED) {
+                    for (int i = 0; i < 3; ++i) {
+                        editor_move_cursor(KEY_UP);
+                    }
+                    cursor_moved = true;
+                } else if (event.bstate & BUTTON5_PRESSED) {
+                    for (int i = 0; i < 3; ++i) {
+                        editor_move_cursor(KEY_DOWN);
+                    }
+                    cursor_moved = true;
                 }
             }
             break;
@@ -1364,7 +1940,7 @@ void editor_process_keypress() {
             break;
     }
 
-    if (E.dirty || cursor_moved || original_cx != E.cx || original_cy != E.cy || time(NULL) - status_message_time < 5) {
+    if (E.dirty || cursor_moved || original_cx != E.cx || original_cy != E.cy || time(NULL) - status_message_time < 5 || E.context_menu_active) {
         editor_refresh_screen();
     }
 }
@@ -1394,9 +1970,14 @@ void editor_select_syntax_highlight() {
 }
 
 void editor_update_syntax(int filerow) {
+    if (filerow < 0 || filerow >= E.num_lines) return;
+
     EditorLine *line = &E.lines[filerow];
 
-    if (line->hl) free(line->hl);
+    if (line->hl) {
+        free(line->hl);
+        line->hl = NULL;
+    }
     line->hl = malloc(line->len);
     if (line->hl == NULL) { return; }
     memset(line->hl, HL_NORMAL, line->len);
@@ -1510,7 +2091,6 @@ void editor_update_syntax(int filerow) {
         next_char_in_loop:;
     }
 
-    // Apply search highlighting after syntax highlighting
     if (E.find_active && E.search_query && filerow >= E.row_offset && filerow < E.row_offset + E.screen_rows) {
         char *match_ptr = line->text;
         while ((match_ptr = strstr(match_ptr, E.search_query)) != NULL) {
@@ -1523,7 +2103,6 @@ void editor_update_syntax(int filerow) {
             match_ptr += strlen(E.search_query);
         }
     }
-
 
     int changed_comment_state = (line->hl_open_comment != in_multiline_comment);
     line->hl_open_comment = in_multiline_comment;
@@ -1547,6 +2126,8 @@ int main(int argc, char *argv[]) {
         }
         E.lines[0].text = strdup("");
         if (E.lines[0].text == NULL) {
+            free(E.lines);
+            E.lines = NULL;
             cleanup_editor();
             fprintf(stderr, "Fatal error: out of memory (main empty line text).\n");
             exit(1);
@@ -1556,7 +2137,7 @@ int main(int argc, char *argv[]) {
         E.lines[0].hl_open_comment = 0;
         E.num_lines = 1;
         editor_update_syntax(0);
-        editor_set_status_message("Welcome to Nimki! Press Ctrl+Q to quit. Ctrl+S to save. Ctrl+F to find.");
+        editor_set_status_message("Welcome to Nimki! Press Ctrl+Q to quit. Ctrl+S to save. Ctrl+F to find. Ctrl+K to select/copy.");
     }
     
     editor_refresh_screen();

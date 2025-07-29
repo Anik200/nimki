@@ -9,7 +9,7 @@ CFLAGS = -Wall -Wextra -s
 
 # Linker flags:
 # -lncurses: Link against the ncurses library
-LDFLAGS = -lncurses
+LDFLAGS = -lncurses -lm
 
 # Name of the executable
 TARGET = nimki

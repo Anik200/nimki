@@ -12,8 +12,9 @@
 #include <sys/wait.h> 
 #include <signal.h>
 #include <stdbool.h>
+#include <math.h>
 
-#define EDITOR_VERSION "0.1.1"
+#define EDITOR_VERSION "0.1.2"
 #define TAB_STOP 4
 
 #define CTRL(k) ((k) & 0x1f)
@@ -84,6 +85,7 @@ typedef struct {
     bool context_menu_active;
     int context_menu_x, context_menu_y;
     int context_menu_selected_option;
+    bool show_line_numbers; 
 } EditorConfig;
 
 EditorConfig E;
@@ -274,6 +276,7 @@ void init_editor() {
     E.context_menu_x = 0;
     E.context_menu_y = 0;
     E.context_menu_selected_option = 0;
+    E.show_line_numbers = false;
 
 
     initscr();
@@ -453,7 +456,6 @@ void editor_undo() {
         E.lines[i].hl = malloc(prev_snapshot->lines[i].len);
         if (E.lines[i].hl == NULL) {
             editor_set_status_message("Undo error: Out of memory restoring line hl.");
-            free(E.lines[i].text);
             for (int j = 0; j < i; ++j) {
                 free(E.lines[j].text);
                 free(E.lines[j].hl);
@@ -626,6 +628,15 @@ void editor_save_file() {
 
 void editor_draw_rows() {
     int y;
+    int line_num_width = 0;
+    if (E.show_line_numbers) {
+        int num_digits = 1;
+        if (E.num_lines > 0) {
+            num_digits = (int)log10(E.num_lines) + 1;
+        }
+        line_num_width = num_digits + 1;
+    }
+
     for (y = 0; y < E.screen_rows; y++) {
         int filerow = y + E.row_offset;
 
@@ -652,7 +663,15 @@ void editor_draw_rows() {
                 sel_max_cx = temp_cx;
             }
 
-            for (int i = 0; i < line->len; i++) {
+            if (E.show_line_numbers) {
+                attron(COLOR_PAIR(HL_COMMENT));
+                mvprintw(y, 0, "%*d ", line_num_width - 1, filerow + 1);
+                attroff(COLOR_PAIR(HL_COMMENT));
+            }
+
+            int text_cols = E.screen_cols - line_num_width;
+
+            for (int i = 0; i < (int)line->len; i++) { // Cast line->len to int
                 int char_display_width = 1;
                 if (line->text[i] == '\t') {
                     char_display_width = TAB_STOP - (display_col % TAB_STOP);
@@ -663,7 +682,7 @@ void editor_draw_rows() {
                     continue;
                 }
 
-                if ((display_col - E.col_offset) >= E.screen_cols) break;
+                if ((display_col - E.col_offset) >= text_cols) break;
 
                 bool is_selected = false;
                 if (E.selection_active) {
@@ -705,10 +724,10 @@ void editor_draw_rows() {
 
                 if (line->text[i] == '\t') {
                     for (int k = 0; k < char_display_width; k++) {
-                        mvaddch(y, (display_col - E.col_offset) + k, ' ');
+                        mvaddch(y, (display_col - E.col_offset) + line_num_width + k, ' ');
                     }
                 } else {
-                    mvaddch(y, (display_col - E.col_offset), line->text[i]);
+                    mvaddch(y, (display_col - E.col_offset) + line_num_width, line->text[i]);
                 }
                 display_col += char_display_width;
             }
@@ -779,7 +798,7 @@ void editor_scroll() {
         E.row_offset = E.cy - E.screen_rows + 1;
     }
 
-    int current_line_len = (E.cy < E.num_lines) ? E.lines[E.cy].len : 0;
+    int current_line_len = (E.cy < E.num_lines) ? (int)E.lines[E.cy].len : 0; // Cast to int
     if (E.cx > current_line_len) {
         E.cx = current_line_len;
     }
@@ -812,15 +831,23 @@ int get_cx_display() {
     if (E.cy >= E.num_lines) return 0;
 
     EditorLine *line = &E.lines[E.cy];
-    for (int i = 0; i < E.cx; i++) {
-        if (i >= line->len) break;
+    for (int i = 0; i < (int)E.cx; i++) { // Cast E.cx to int
+        if (i >= (int)line->len) break; // Cast line->len to int
         if (line->text[i] == '\t') {
             display_cx += (TAB_STOP - (display_cx % TAB_STOP));
         } else {
             display_cx++;
         }
     }
-    return display_cx;
+    int line_num_width = 0;
+    if (E.show_line_numbers) {
+        int num_digits = 1;
+        if (E.num_lines > 0) {
+            num_digits = (int)log10(E.num_lines) + 1;
+        }
+        line_num_width = num_digits + 1;
+    }
+    return display_cx + line_num_width;
 }
 
 void editor_move_cursor(int key) {
@@ -832,13 +859,13 @@ void editor_move_cursor(int key) {
                 E.cx--;
             } else if (E.cy > 0) {
                 E.cy--;
-                E.cx = E.lines[E.cy].len;
+                E.cx = (int)E.lines[E.cy].len; // Cast to int
             }
             break;
         case KEY_RIGHT:
-            if (line && E.cx < line->len) {
+            if (line && E.cx < (int)line->len) { // Cast to int
                 E.cx++;
-            } else if (line && E.cx == line->len && E.cy < E.num_lines - 1) {
+            } else if (line && E.cx == (int)line->len && E.cy < E.num_lines - 1) { // Cast to int
                 E.cy++;
                 E.cx = 0;
             }
@@ -857,7 +884,7 @@ void editor_move_cursor(int key) {
             E.cx = 0;
             break;
         case KEY_END:
-            if (line) E.cx = line->len;
+            if (line) E.cx = (int)line->len; // Cast to int
             break;
         case KEY_PPAGE:
         case KEY_NPAGE:
@@ -874,7 +901,7 @@ void editor_move_cursor(int key) {
             break;
     }
     line = (E.cy >= E.num_lines) ? NULL : &E.lines[E.cy];
-    int line_len = line ? line->len : 0;
+    int line_len = line ? (int)line->len : 0; // Cast to int
     if (E.cx > line_len) {
         E.cx = line_len;
     }
@@ -1220,7 +1247,7 @@ void editor_del_char() {
                 return;
             }
 
-            E.cx = prev_line->len;
+            E.cx = (int)prev_line->len;
             E.cy--;
             E.dirty = 1;
             editor_update_syntax(E.cy);
@@ -1230,7 +1257,7 @@ void editor_del_char() {
 
 char *editor_prompt(const char *prompt_fmt, ...) {
     char buffer[128];
-    int buflen = 0;
+    size_t buflen = 0;
     buffer[0] = '\0';
 
     while (1) {
@@ -1373,13 +1400,13 @@ void editor_copy_selection_to_clipboard() {
 
         EditorLine *line = &E.lines[r];
         int start_col = (r == sel_min_cy) ? sel_min_cx : 0;
-        int end_col = (r == sel_max_cy) ? sel_max_cx : line->len;
+        int end_col = (r == sel_max_cy) ? sel_max_cx : (int)line->len;
 
-        if (end_col > line->len) end_col = line->len;
+        if (end_col > (int)line->len) end_col = (int)line->len;
         if (start_col < 0) start_col = 0;
 
         if (end_col > start_col) {
-            total_len += (end_col - start_col);
+            total_len += (size_t)(end_col - start_col);
         }
         if (r < sel_max_cy) {
             total_len += 1;
@@ -1404,13 +1431,13 @@ void editor_copy_selection_to_clipboard() {
 
         EditorLine *line = &E.lines[r];
         int start_col = (r == sel_min_cy) ? sel_min_cx : 0;
-        int end_col = (r == sel_max_cy) ? sel_max_cx : line->len;
+        int end_col = (r == sel_max_cy) ? sel_max_cx : (int)line->len;
 
-        if (end_col > line->len) end_col = line->len;
+        if (end_col > (int)line->len) end_col = (int)line->len;
         if (start_col < 0) start_col = 0;
 
         if (end_col > start_col) {
-            size_t segment_len = end_col - start_col;
+            size_t segment_len = (size_t)(end_col - start_col);
             memcpy(selected_text + current_offset, line->text + start_col, segment_len);
             current_offset += segment_len;
         }
@@ -1524,7 +1551,7 @@ void editor_find_next(int direction) {
         current_col += direction;
     }
 
-    int query_len = strlen(E.search_query);
+    size_t query_len = strlen(E.search_query);
     int original_row = current_row;
     int original_col = current_col;
 
@@ -1535,7 +1562,7 @@ void editor_find_next(int direction) {
         char *match = NULL;
 
         if (direction == 1) {
-            if (current_col >= line->len) {
+            if (current_col >= (int)line->len) {
                 current_row++;
                 current_col = 0;
                 continue;
@@ -1545,11 +1572,11 @@ void editor_find_next(int direction) {
             if (current_col < 0) {
                 current_row--;
                 if (current_row < 0) break;
-                current_col = E.lines[current_row].len - 1;
+                current_col = (int)E.lines[current_row].len - 1;
                 continue;
             }
             for (int i = current_col; i >= 0; i--) {
-                if (i + query_len <= line->len && strncmp(line->text + i, E.search_query, query_len) == 0) {
+                if ((size_t)i + query_len <= line->len && strncmp(line->text + i, E.search_query, query_len) == 0) {
                     match = line->text + i;
                     break;
                 }
@@ -1571,7 +1598,7 @@ void editor_find_next(int direction) {
             current_col = 0;
         } else {
             current_row--;
-            current_col = E.lines[current_row].len - 1;
+            current_col = (int)E.lines[current_row].len - 1;
         }
 
         if (current_row >= E.num_lines) {
@@ -1579,7 +1606,7 @@ void editor_find_next(int direction) {
             current_col = 0;
         } else if (current_row < 0) {
             current_row = E.num_lines - 1;
-            current_col = E.lines[current_row].len - 1;
+            current_col = (int)E.lines[E.num_lines - 1].len - 1;
         }
 
         if (current_row == original_row && current_col == original_col) {
@@ -1630,7 +1657,7 @@ void editor_select_all() {
     E.selection_start_cy = 0;
     E.selection_start_cx = 0;
     E.selection_end_cy = E.num_lines > 0 ? E.num_lines - 1 : 0;
-    E.selection_end_cx = E.num_lines > 0 ? E.lines[E.selection_end_cy].len : 0;
+    E.selection_end_cx = E.num_lines > 0 ? (int)E.lines[E.selection_end_cy].len : 0;
     editor_set_status_message("All text selected.");
     for (int i = 0; i < E.num_lines; i++) {
         editor_update_syntax(i);
@@ -1647,7 +1674,7 @@ void editor_draw_context_menu() {
         num_options++;
     }
 
-    int menu_width = 0;
+    size_t menu_width = 0; // Changed to size_t
     for (int i = 0; options[i] != NULL; i++) {
         if (strlen(options[i]) > menu_width) {
             menu_width = strlen(options[i]);
@@ -1660,8 +1687,8 @@ void editor_draw_context_menu() {
     int start_x = E.context_menu_x;
     int start_y = E.context_menu_y;
 
-    if (start_x + menu_width >= E.screen_cols) {
-        start_x = E.screen_cols - menu_width - 1;
+    if (start_x + (int)menu_width >= E.screen_cols) { // Cast menu_width to int for comparison
+        start_x = E.screen_cols - (int)menu_width - 1; // Cast menu_width to int
     }
     if (start_y + menu_height >= E.screen_rows + 2) {
         start_y = E.screen_rows + 2 - menu_height -1;
@@ -1672,7 +1699,7 @@ void editor_draw_context_menu() {
 
     attron(A_REVERSE);
     for (int y = 0; y < menu_height; y++) {
-        mvhline(start_y + y, start_x, ' ', menu_width);
+        mvhline(start_y + y, start_x, ' ', (int)menu_width); // Cast menu_width to int
     }
     attroff(A_REVERSE);
 
@@ -1731,7 +1758,7 @@ void editor_process_keypress() {
                         for (int i = 0; options[i] != NULL; i++) {
                             num_options++;
                         }
-                        int menu_width = 0;
+                        size_t menu_width = 0; // Changed to size_t
                         for (int i = 0; options[i] != NULL; i++) {
                             if (strlen(options[i]) > menu_width) {
                                 menu_width = strlen(options[i]);
@@ -1742,8 +1769,8 @@ void editor_process_keypress() {
                         int start_x = E.context_menu_x;
                         int start_y = E.context_menu_y;
 
-                        if (start_x + menu_width >= E.screen_cols) {
-                            start_x = E.screen_cols - menu_width - 1;
+                        if (start_x + (int)menu_width >= E.screen_cols) { // Cast menu_width to int
+                            start_x = E.screen_cols - (int)menu_width - 1; // Cast menu_width to int
                         }
                         if (start_y + num_options + 2 >= E.screen_rows + 2) {
                             start_y = E.screen_rows + 2 - (num_options + 2) -1;
@@ -1751,7 +1778,7 @@ void editor_process_keypress() {
                         if (start_x < 0) start_x = 0;
                         if (start_y < 0) start_y = 0;
 
-                        if (event.x >= start_x && event.x < start_x + menu_width &&
+                        if (event.x >= start_x && event.x < start_x + (int)menu_width && // Cast menu_width to int
                             event.y >= start_y + 1 && event.y < start_y + 1 + num_options) {
                             int clicked_option = event.y - (start_y + 1);
                             if (clicked_option == 0) {
@@ -1880,6 +1907,11 @@ void editor_process_keypress() {
                 E.selection_end_cx = E.cx;
             }
             break;
+        case CTRL('t'):
+            E.show_line_numbers = !E.show_line_numbers;
+            editor_set_status_message("Line numbers %s", E.show_line_numbers ? "ON" : "OFF");
+            cursor_moved = true;
+            break;
 
         case KEY_MOUSE:
             if (getmouse(&event) == OK) {
@@ -1897,7 +1929,7 @@ void editor_process_keypress() {
                     if (E.cy < E.num_lines) {
                         EditorLine *line = &E.lines[E.cy];
                         int current_display_cx = 0;
-                        for (int char_idx = 0; char_idx < line->len; char_idx++) {
+                        for (int char_idx = 0; char_idx < (int)line->len; char_idx++) {
                             int char_display_width = 1;
                             if (line->text[char_idx] == '\t') {
                                 char_display_width = TAB_STOP - (current_display_cx % TAB_STOP);
@@ -1915,7 +1947,7 @@ void editor_process_keypress() {
                         E.cy = E.num_lines > 0 ? E.num_lines - 1 : 0;
                     }
                     EditorLine *line = (E.cy < E.num_lines) ? &E.lines[E.cy] : NULL;
-                    int line_len = line ? line->len : 0;
+                    int line_len = line ? (int)line->len : 0;
                     if (E.cx > line_len) {
                         E.cx = line_len;
                     }
@@ -1994,7 +2026,7 @@ void editor_update_syntax(int filerow) {
     int in_string = 0;
     int in_multiline_comment = (filerow > 0 && E.lines[filerow - 1].hl_open_comment);
 
-    int i = 0;
+    size_t i = 0;
     while (i < line->len) {
         char c = line->text[i];
         unsigned char prev_hl = (i > 0) ? line->hl[i-1] : HL_NORMAL;
@@ -2013,7 +2045,7 @@ void editor_update_syntax(int filerow) {
                 continue;
             } else if (strncmp(&line->text[i], mc_start, strlen(mc_start)) == 0) {
                 for (size_t j = 0; j < strlen(mc_start); j++) line->hl[i+j] = HL_COMMENT;
-                i += strlen(mc_start);
+                    i += strlen(mc_start);
                 in_multiline_comment = 1;
                 continue;
             }
@@ -2095,8 +2127,8 @@ void editor_update_syntax(int filerow) {
         char *match_ptr = line->text;
         while ((match_ptr = strstr(match_ptr, E.search_query)) != NULL) {
             int start_col = match_ptr - line->text;
-            for (int k = 0; k < strlen(E.search_query); k++) {
-                if (start_col + k < line->len) {
+            for (size_t k = 0; k < strlen(E.search_query); k++) {
+                if ((size_t)start_col + k < line->len) {
                     line->hl[start_col + k] = HL_MATCH;
                 }
             }
@@ -2137,7 +2169,7 @@ int main(int argc, char *argv[]) {
         E.lines[0].hl_open_comment = 0;
         E.num_lines = 1;
         editor_update_syntax(0);
-        editor_set_status_message("Welcome to Nimki! Press Ctrl+Q to quit. Ctrl+S to save. Ctrl+F to find. Ctrl+K to select/copy.");
+        editor_set_status_message("Welcome to Nimki! Press Ctrl+Q to quit. Ctrl+S to save. Ctrl+F to find. Ctrl+K to select/copy. Ctrl+T to toggle line numbers.");
     }
     
     editor_refresh_screen();

@@ -13,7 +13,7 @@
 #include <signal.h>
 #include <stdbool.h>
 
-#define EDITOR_VERSION "0.1.0"
+#define EDITOR_VERSION "0.1.1"
 #define TAB_STOP 4
 
 #define CTRL(k) ((k) & 0x1f)

@@ -24,5 +24,7 @@ Nimki is a simple text editor written in C.
 - exit the editor with [ctrl + q] or [ctrl + c]
 - find text with [ctrl + f] 
 - undo with [ctrl + z]
+- toggle line numbers with [ctrl + t]
+- right click when using [ctrl + k] to use the promt to copy or select all text
      
 # Get Nimkified!

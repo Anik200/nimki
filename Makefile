@@ -1,5 +1,5 @@
 # Compiler to use
-CC = gcc
+CC = cc
 
 # Compiler flags:
 # -Wall: Enable all standard warnings

@@ -4,6 +4,8 @@
 Nimki is a simple text editor written in C.
 <img width="1366" height="726" alt="image" src="https://github.com/user-attachments/assets/a848845e-f84d-4dff-8592-0675947cb938" />
 <img width="1366" height="720" alt="image" src="https://github.com/user-attachments/assets/4741e94a-89fd-435b-b76d-7c6b9c1902dc" />
+<img width="1409" height="904" alt="image" src="https://github.com/user-attachments/assets/a75904c1-8a58-45d8-aa5e-933b5bbb9c4d" />
+
 
 
 # Installation

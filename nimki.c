@@ -1,3 +1,4 @@
+
 #define _GNU_SOURCE
 
 #include <ncurses.h>
@@ -9,12 +10,15 @@
 #include <stdarg.h>
 #include <ctype.h>
 #include <unistd.h>
-#include <sys/wait.h> 
+#include <sys/wait.h>
 #include <signal.h>
 #include <stdbool.h>
 #include <math.h>
+#include <dirent.h>
+#include <sys/stat.h>
+#include <limits.h>
 
-#define EDITOR_VERSION "0.1.2"
+#define EDITOR_VERSION "0.1.3"
 #define TAB_STOP 4
 
 #define CTRL(k) ((k) & 0x1f)
@@ -85,12 +89,50 @@ typedef struct {
     bool context_menu_active;
     int context_menu_x, context_menu_y;
     int context_menu_selected_option;
-    bool show_line_numbers; 
+    bool show_line_numbers;
+
+    bool file_tree_visible;
+    int file_tree_cursor;
+    int file_tree_offset;
+    int file_tree_width;
 } EditorConfig;
 
 EditorConfig E;
 
+#define FILE_TREE_WIDTH 30
+
+typedef struct FileTreeNode {
+    char *name;
+    char *path;
+    bool is_dir;
+    bool expanded;
+    struct FileTreeNode **children;
+    int num_children;
+    int parent_index;
+} FileTreeNode;
+
+typedef struct {
+    FileTreeNode *root;
+    FileTreeNode **flat_nodes;
+    int flat_node_count;
+    int max_nodes;
+} FileTreeState;
+
+FileTreeState FT = {NULL, NULL, 0, 0};
+
 EditorSyntax *E_syntax = NULL;
+
+FileTreeNode *create_file_tree_node(const char *path, bool is_dir);
+void free_file_tree(FileTreeNode *node);
+FileTreeNode *load_directory_tree(const char *path);
+void flatten_file_tree(FileTreeNode *node, FileTreeNode ***array, int *count, int *capacity);
+void refresh_flat_file_tree();
+int get_node_depth(FileTreeNode *node);
+void draw_file_tree();
+void toggle_file_tree();
+void file_tree_move_cursor(int direction);
+void file_tree_toggle_expand();
+void file_tree_open_file();
 
 char *C_HL_extensions[] = { ".c", ".h", ".cpp", ".hpp", ".cc", NULL };
 char *C_HL_keywords[] = {
@@ -278,6 +320,11 @@ void init_editor() {
     E.context_menu_selected_option = 0;
     E.show_line_numbers = false;
 
+    E.file_tree_visible = false;
+    E.file_tree_cursor = 0;
+    E.file_tree_offset = 0;
+    E.file_tree_width = 30;
+
 
     initscr();
     raw();
@@ -350,6 +397,17 @@ void cleanup_editor() {
     }
     E.undo_history_len = 0;
     E.undo_history_idx = 0;
+
+    if (FT.root) {
+        free_file_tree(FT.root);
+        FT.root = NULL;
+    }
+    if (FT.flat_nodes) {
+        free(FT.flat_nodes);
+        FT.flat_nodes = NULL;
+    }
+    FT.flat_node_count = 0;
+    FT.max_nodes = 0;
 }
 
 void editor_save_state() {
@@ -627,6 +685,11 @@ void editor_save_file() {
 }
 
 void editor_draw_rows() {
+    if (E.file_tree_visible) {
+        draw_file_tree();
+    }
+
+    int x_offset = E.file_tree_visible ? FILE_TREE_WIDTH : 0;
     int y;
     int line_num_width = 0;
     if (E.show_line_numbers) {
@@ -640,7 +703,7 @@ void editor_draw_rows() {
     for (y = 0; y < E.screen_rows; y++) {
         int filerow = y + E.row_offset;
 
-        move(y, 0);
+        move(y, x_offset);
         clrtoeol();
 
         if (filerow >= E.num_lines) {
@@ -665,13 +728,13 @@ void editor_draw_rows() {
 
             if (E.show_line_numbers) {
                 attron(COLOR_PAIR(HL_COMMENT));
-                mvprintw(y, 0, "%*d ", line_num_width - 1, filerow + 1);
+                mvprintw(y, x_offset, "%*d ", line_num_width - 1, filerow + 1);
                 attroff(COLOR_PAIR(HL_COMMENT));
             }
 
-            int text_cols = E.screen_cols - line_num_width;
+            int text_cols = E.screen_cols - x_offset - line_num_width;
 
-            for (int i = 0; i < (int)line->len; i++) { // Cast line->len to int
+            for (int i = 0; i < (int)line->len; i++) {
                 int char_display_width = 1;
                 if (line->text[i] == '\t') {
                     char_display_width = TAB_STOP - (display_col % TAB_STOP);
@@ -724,10 +787,10 @@ void editor_draw_rows() {
 
                 if (line->text[i] == '\t') {
                     for (int k = 0; k < char_display_width; k++) {
-                        mvaddch(y, (display_col - E.col_offset) + line_num_width + k, ' ');
+                        mvaddch(y, x_offset + (display_col - E.col_offset) + line_num_width + k, ' ');
                     }
                 } else {
-                    mvaddch(y, (display_col - E.col_offset) + line_num_width, line->text[i]);
+                    mvaddch(y, x_offset + (display_col - E.col_offset) + line_num_width, line->text[i]);
                 }
                 display_col += char_display_width;
             }
@@ -741,13 +804,17 @@ void editor_draw_rows() {
 void editor_draw_status_bar() {
     attron(A_REVERSE);
 
-    mvprintw(E.screen_rows, 0, "%.20s - %d lines %s",
+    int x_offset = E.file_tree_visible ? FILE_TREE_WIDTH : 0;
+    int max_width = E.screen_cols - x_offset;
+
+    mvprintw(E.screen_rows, x_offset, "%.*s - %d lines %s",
+             max_width - 15,
              E.filename ? E.filename : "[No Name]", E.num_lines,
              E.dirty ? "(modified)" : "");
 
     char rstatus[80];
     snprintf(rstatus, sizeof(rstatus), "%d/%d", E.cy + 1, E.num_lines);
-    mvprintw(E.screen_rows, E.screen_cols - strlen(rstatus), "%s", rstatus);
+    mvprintw(E.screen_rows, x_offset + max_width - strlen(rstatus), "%s", rstatus);
 
     attroff(A_REVERSE);
 }
@@ -764,13 +831,15 @@ void editor_set_status_message(const char *fmt, ...) {
 }
 
 void editor_draw_message_bar() {
-    move(E.screen_rows + 1, 0);
+    int x_offset = E.file_tree_visible ? FILE_TREE_WIDTH : 0;
+    move(E.screen_rows + 1, x_offset);
     clrtoeol();
 
     int msglen = strlen(status_message);
-    if (msglen > E.screen_cols) msglen = E.screen_cols;
+    int max_width = E.screen_cols - x_offset;
+    if (msglen > max_width) msglen = max_width;
     if (time(NULL) - status_message_time < 5) {
-        mvprintw(E.screen_rows + 1, 0, "%.*s", msglen, status_message);
+        mvprintw(E.screen_rows + 1, x_offset, "%.*s", msglen, status_message);
     }
 }
 
@@ -798,7 +867,7 @@ void editor_scroll() {
         E.row_offset = E.cy - E.screen_rows + 1;
     }
 
-    int current_line_len = (E.cy < E.num_lines) ? (int)E.lines[E.cy].len : 0; // Cast to int
+    int current_line_len = (E.cy < E.num_lines) ? (int)E.lines[E.cy].len : 0;
     if (E.cx > current_line_len) {
         E.cx = current_line_len;
     }
@@ -831,8 +900,8 @@ int get_cx_display() {
     if (E.cy >= E.num_lines) return 0;
 
     EditorLine *line = &E.lines[E.cy];
-    for (int i = 0; i < (int)E.cx; i++) { // Cast E.cx to int
-        if (i >= (int)line->len) break; // Cast line->len to int
+    for (int i = 0; i < (int)E.cx; i++) {
+        if (i >= (int)line->len) break;
         if (line->text[i] == '\t') {
             display_cx += (TAB_STOP - (display_cx % TAB_STOP));
         } else {
@@ -859,13 +928,13 @@ void editor_move_cursor(int key) {
                 E.cx--;
             } else if (E.cy > 0) {
                 E.cy--;
-                E.cx = (int)E.lines[E.cy].len; // Cast to int
+                E.cx = (int)E.lines[E.cy].len;
             }
             break;
         case KEY_RIGHT:
-            if (line && E.cx < (int)line->len) { // Cast to int
+            if (line && E.cx < (int)line->len) {
                 E.cx++;
-            } else if (line && E.cx == (int)line->len && E.cy < E.num_lines - 1) { // Cast to int
+            } else if (line && E.cx == (int)line->len && E.cy < E.num_lines - 1) {
                 E.cy++;
                 E.cx = 0;
             }
@@ -884,7 +953,7 @@ void editor_move_cursor(int key) {
             E.cx = 0;
             break;
         case KEY_END:
-            if (line) E.cx = (int)line->len; // Cast to int
+            if (line) E.cx = (int)line->len;
             break;
         case KEY_PPAGE:
         case KEY_NPAGE:
@@ -901,7 +970,7 @@ void editor_move_cursor(int key) {
             break;
     }
     line = (E.cy >= E.num_lines) ? NULL : &E.lines[E.cy];
-    int line_len = line ? (int)line->len : 0; // Cast to int
+    int line_len = line ? (int)line->len : 0;
     if (E.cx > line_len) {
         E.cx = line_len;
     }
@@ -1674,7 +1743,7 @@ void editor_draw_context_menu() {
         num_options++;
     }
 
-    size_t menu_width = 0; // Changed to size_t
+    size_t menu_width = 0;
     for (int i = 0; options[i] != NULL; i++) {
         if (strlen(options[i]) > menu_width) {
             menu_width = strlen(options[i]);
@@ -1687,8 +1756,8 @@ void editor_draw_context_menu() {
     int start_x = E.context_menu_x;
     int start_y = E.context_menu_y;
 
-    if (start_x + (int)menu_width >= E.screen_cols) { // Cast menu_width to int for comparison
-        start_x = E.screen_cols - (int)menu_width - 1; // Cast menu_width to int
+    if (start_x + (int)menu_width >= E.screen_cols) {
+        start_x = E.screen_cols - (int)menu_width - 1;
     }
     if (start_y + menu_height >= E.screen_rows + 2) {
         start_y = E.screen_rows + 2 - menu_height -1;
@@ -1699,7 +1768,7 @@ void editor_draw_context_menu() {
 
     attron(A_REVERSE);
     for (int y = 0; y < menu_height; y++) {
-        mvhline(start_y + y, start_x, ' ', (int)menu_width); // Cast menu_width to int
+        mvhline(start_y + y, start_x, ' ', (int)menu_width);
     }
     attroff(A_REVERSE);
 
@@ -1714,6 +1783,235 @@ void editor_draw_context_menu() {
     }
 }
 
+
+FileTreeNode *create_file_tree_node(const char *path, bool is_dir) {
+    FileTreeNode *node = malloc(sizeof(FileTreeNode));
+    if (!node) return NULL;
+
+    node->path = strdup(path);
+    if (!node->path) {
+        free(node);
+        return NULL;
+    }
+
+    const char *slash = strrchr(path, '/');
+    node->name = strdup(slash ? slash + 1 : path);
+    if (!node->name) {
+        free(node->path);
+        free(node);
+        return NULL;
+    }
+
+    node->is_dir = is_dir;
+    node->expanded = false;
+    node->children = NULL;
+    node->num_children = 0;
+    node->parent_index = -1;
+
+    return node;
+}
+
+void free_file_tree(FileTreeNode *node) {
+    if (!node) return;
+
+    for (int i = 0; i < node->num_children; i++) {
+        free_file_tree(node->children[i]);
+    }
+    free(node->children);
+    free(node->name);
+    free(node->path);
+    free(node);
+}
+
+FileTreeNode *load_directory_tree(const char *path) {
+    FileTreeNode *node = create_file_tree_node(path, true);
+    if (!node) return NULL;
+
+    struct stat st;
+    if (stat(path, &st) == -1) {
+        node->is_dir = false;
+        return node;
+    }
+    node->is_dir = S_ISDIR(st.st_mode);
+
+    if (!node->is_dir) return node;
+
+    DIR *dir = opendir(path);
+    if (!dir) return node;
+
+    struct dirent *entry;
+    node->children = NULL;
+    node->num_children = 0;
+
+    while ((entry = readdir(dir)) != NULL) {
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
+            continue;
+
+        char child_path[PATH_MAX];
+        snprintf(child_path, sizeof(child_path), "%s/%s", path, entry->d_name);
+
+        FileTreeNode *child = load_directory_tree(child_path);
+        if (child) {
+            node->num_children++;
+            node->children = realloc(node->children, node->num_children * sizeof(FileTreeNode *));
+            if (!node->children) {
+                free_file_tree(child);
+                closedir(dir);
+                return node;
+            }
+            node->children[node->num_children - 1] = child;
+        }
+    }
+    closedir(dir);
+    return node;
+}
+
+void flatten_file_tree(FileTreeNode *node, FileTreeNode ***array, int *count, int *capacity) {
+    if (*count >= *capacity) {
+        *capacity = (*capacity == 0) ? 64 : *capacity * 2;
+        FileTreeNode **new_array = realloc(*array, (*capacity) * sizeof(FileTreeNode *));
+        if (!new_array) return;
+        *array = new_array;
+    }
+    (*array)[(*count)++] = node;
+    if (node->is_dir && node->expanded) {
+        for (int i = 0; i < node->num_children; i++) {
+            flatten_file_tree(node->children[i], array, count, capacity);
+        }
+    }
+}
+
+void refresh_flat_file_tree() {
+    if (FT.flat_nodes) {
+        free(FT.flat_nodes);
+    }
+
+    FT.flat_nodes = NULL;
+    FT.flat_node_count = 0;
+    int capacity = 0;
+
+    if (FT.root) {
+        flatten_file_tree(FT.root, &FT.flat_nodes, &FT.flat_node_count, &capacity);
+    }
+}
+
+int get_node_depth(FileTreeNode *node) {
+    if (!node || !node->path) return 0;
+
+    int depth = 0;
+    const char *path = node->path;
+    for (const char *c = path; *c; c++) {
+        if (*c == '/') depth++;
+    }
+    if (FT.root && FT.root->path) {
+        const char *root_path = FT.root->path;
+        int root_depth = 0;
+        for (const char *c = root_path; *c; c++) {
+            if (*c == '/') root_depth++;
+        }
+        depth -= root_depth;
+        if (depth < 0) depth = 0;
+    }
+    return depth;
+}
+
+void draw_file_tree() {
+    if (!E.file_tree_visible || !FT.flat_nodes) return;
+
+    int max_rows = E.screen_rows;
+    int start = E.file_tree_offset;
+    int end = start + max_rows;
+    if (end > FT.flat_node_count) end = FT.flat_node_count;
+
+    for (int i = start; i < end; i++) {
+        FileTreeNode *node = FT.flat_nodes[i];
+        int y = i - start;
+        move(y, 0);
+        clrtoeol();
+
+        int indent = get_node_depth(node) * 2;
+        if (indent > 20) indent = 20;
+
+        if (node->is_dir) {
+            if (node->expanded)
+                mvprintw(y, indent, "[-] %s", node->name);
+            else
+                mvprintw(y, indent, "[+] %s", node->name);
+        } else {
+            mvprintw(y, indent, " %s", node->name);
+        }
+
+        if (i == E.file_tree_cursor) {
+            attron(A_REVERSE);
+            mvchgat(y, 0, -1, A_REVERSE, 0, NULL);
+            attroff(A_REVERSE);
+        }
+    }
+
+    for (int i = end; i < max_rows; i++) {
+        move(i, 0);
+        clrtoeol();
+    }
+
+    for (int y = 0; y < E.screen_rows; y++) {
+        mvaddch(y, FILE_TREE_WIDTH - 1, ACS_VLINE);
+    }
+}
+
+void toggle_file_tree() {
+    E.file_tree_visible = !E.file_tree_visible;
+    if (E.file_tree_visible) {
+        if (!FT.root) {
+            char cwd[PATH_MAX];
+            if (!getcwd(cwd, sizeof(cwd))) strcpy(cwd, ".");
+            FT.root = load_directory_tree(cwd);
+            if (FT.root) {
+                FT.root->expanded = true;
+                refresh_flat_file_tree();
+                E.file_tree_cursor = 0;
+                E.file_tree_offset = 0;
+            }
+        }
+    } else {
+    }
+}
+
+void file_tree_move_cursor(int direction) {
+    if (!E.file_tree_visible || !FT.flat_nodes) return;
+
+    E.file_tree_cursor += direction;
+    if (E.file_tree_cursor < 0) E.file_tree_cursor = 0;
+    if (E.file_tree_cursor >= FT.flat_node_count)
+        E.file_tree_cursor = FT.flat_node_count - 1;
+
+    if (E.file_tree_cursor < E.file_tree_offset) {
+        E.file_tree_offset = E.file_tree_cursor;
+    } else if (E.file_tree_cursor >= E.file_tree_offset + E.screen_rows) {
+        E.file_tree_offset = E.file_tree_cursor - E.screen_rows + 1;
+    }
+}
+
+void file_tree_toggle_expand() {
+    if (!E.file_tree_visible || !FT.flat_nodes || E.file_tree_cursor >= FT.flat_node_count) return;
+
+    FileTreeNode *node = FT.flat_nodes[E.file_tree_cursor];
+    if (node->is_dir) {
+        node->expanded = !node->expanded;
+        refresh_flat_file_tree();
+        if (E.file_tree_cursor >= FT.flat_node_count)
+            E.file_tree_cursor = FT.flat_node_count - 1;
+    }
+}
+
+void file_tree_open_file() {
+    if (!E.file_tree_visible || !FT.flat_nodes || E.file_tree_cursor >= FT.flat_node_count) return;
+
+    FileTreeNode *node = FT.flat_nodes[E.file_tree_cursor];
+    if (!node->is_dir) {
+        editor_read_file(node->path);
+        toggle_file_tree();
+    }
+}
 
 void editor_process_keypress() {
     MEVENT event;
@@ -1746,59 +2044,11 @@ void editor_process_keypress() {
                 }
                 editor_set_status_message("");
                 break;
-            case 27: // ESC key
+            case 27:
                 E.context_menu_active = false;
                 editor_set_status_message("");
                 break;
-            case KEY_MOUSE:
-                if (getmouse(&event) == OK) {
-                    if (event.bstate & BUTTON1_PRESSED || event.bstate & BUTTON1_CLICKED) {
-                        const char *options[] = {"Copy", "Select All", NULL};
-                        int num_options = 0;
-                        for (int i = 0; options[i] != NULL; i++) {
-                            num_options++;
-                        }
-                        size_t menu_width = 0; // Changed to size_t
-                        for (int i = 0; options[i] != NULL; i++) {
-                            if (strlen(options[i]) > menu_width) {
-                                menu_width = strlen(options[i]);
-                            }
-                        }
-                        menu_width += 4;
-
-                        int start_x = E.context_menu_x;
-                        int start_y = E.context_menu_y;
-
-                        if (start_x + (int)menu_width >= E.screen_cols) { // Cast menu_width to int
-                            start_x = E.screen_cols - (int)menu_width - 1; // Cast menu_width to int
-                        }
-                        if (start_y + num_options + 2 >= E.screen_rows + 2) {
-                            start_y = E.screen_rows + 2 - (num_options + 2) -1;
-                        }
-                        if (start_x < 0) start_x = 0;
-                        if (start_y < 0) start_y = 0;
-
-                        if (event.x >= start_x && event.x < start_x + (int)menu_width && // Cast menu_width to int
-                            event.y >= start_y + 1 && event.y < start_y + 1 + num_options) {
-                            int clicked_option = event.y - (start_y + 1);
-                            if (clicked_option == 0) {
-                                editor_copy_selection_to_clipboard();
-                            } else if (clicked_option == 1) {
-                                editor_select_all();
-                            }
-                        } else { // Clicked outside menu
-                             E.context_menu_active = false;
-                             editor_set_status_message("");
-                        }
-                    }
-                }
-                break; // Break after mouse handling
-            default:
-                // Do nothing, menu stays active
-                break;
         }
-        editor_refresh_screen();
-        return;
     }
 
     bool current_key_is_selection_or_cursor_move = (c == CTRL('k') || c == KEY_UP || c == KEY_DOWN ||
@@ -1855,6 +2105,10 @@ void editor_process_keypress() {
             paste_from_clipboard();
             break;
 
+        case CTRL('w'):
+            editor_find();
+            break;
+
         case CTRL('z'):
             editor_undo();
             break;
@@ -1884,27 +2138,83 @@ void editor_process_keypress() {
             break;
 
         case '\t':
-            editor_insert_char('\t');
+            if (E.file_tree_visible) {
+                file_tree_toggle_expand();
+                editor_refresh_screen();
+                return;
+            } else {
+                editor_insert_char('\t');
+            }
             break;
 
         case '\r':
         case '\n':
-            editor_insert_newline();
+            if (E.file_tree_visible) {
+                file_tree_open_file();
+                return;
+            } else {
+                editor_insert_newline();
+            }
             break;
 
         case KEY_HOME:
         case KEY_END:
+            if (E.file_tree_visible) {
+                editor_move_cursor(c);
+                cursor_moved = true;
+                if (E.selection_active) {
+                    E.selection_end_cy = E.cy;
+                    E.selection_end_cx = E.cx;
+                }
+            } else {
+                editor_move_cursor(c);
+                cursor_moved = true;
+                if (E.selection_active) {
+                    E.selection_end_cy = E.cy;
+                    E.selection_end_cx = E.cx;
+                }
+            }
+            break;
         case KEY_PPAGE:
         case KEY_NPAGE:
+            if (E.file_tree_visible) {
+                if (c == KEY_PPAGE) {
+                    file_tree_move_cursor(-E.screen_rows);
+                } else if (c == KEY_NPAGE) {
+                    file_tree_move_cursor(E.screen_rows);
+                }
+                editor_refresh_screen();
+                return;
+            } else {
+                editor_move_cursor(c);
+                cursor_moved = true;
+                if (E.selection_active) {
+                    E.selection_end_cy = E.cy;
+                    E.selection_end_cx = E.cx;
+                }
+            }
+            break;
         case KEY_UP:
         case KEY_DOWN:
         case KEY_LEFT:
         case KEY_RIGHT:
-            editor_move_cursor(c);
-            cursor_moved = true;
-            if (E.selection_active) {
-                E.selection_end_cy = E.cy;
-                E.selection_end_cx = E.cx;
+            if (E.file_tree_visible) {
+                if (c == KEY_UP) {
+                    file_tree_move_cursor(-1);
+                } else if (c == KEY_DOWN) {
+                    file_tree_move_cursor(1);
+                } else if (c == KEY_LEFT || c == KEY_RIGHT) {
+                    file_tree_toggle_expand();
+                }
+                editor_refresh_screen();
+                return;
+            } else {
+                editor_move_cursor(c);
+                cursor_moved = true;
+                if (E.selection_active) {
+                    E.selection_end_cy = E.cy;
+                    E.selection_end_cx = E.cx;
+                }
             }
             break;
         case CTRL('t'):
@@ -1913,17 +2223,43 @@ void editor_process_keypress() {
             cursor_moved = true;
             break;
 
+        case CTRL('n'):
+            toggle_file_tree();
+            editor_refresh_screen();
+            return;
+
         case KEY_MOUSE:
             if (getmouse(&event) == OK) {
-                if (event.bstate & BUTTON3_PRESSED) {
-                    E.context_menu_active = true;
-                    E.context_menu_x = event.x;
-                    E.context_menu_y = event.y;
-                    E.context_menu_selected_option = 0;
-                    editor_set_status_message("");
+                if (E.file_tree_visible && event.x < FILE_TREE_WIDTH - 1 && (event.bstate & BUTTON1_PRESSED || event.bstate & BUTTON1_CLICKED)) {
+                    int tree_row = event.y + E.file_tree_offset;
+                    if (tree_row < FT.flat_node_count) {
+                        E.file_tree_cursor = tree_row;
+                        FileTreeNode *node = FT.flat_nodes[E.file_tree_cursor];
+                        if (node->is_dir) {
+                            file_tree_toggle_expand();
+                        } else {
+                            file_tree_open_file();
+                        }
+                        editor_refresh_screen();
+                        return;
+                    }
+                } else if (event.bstate & BUTTON4_PRESSED) {
+                    for (int i = 0; i < 3; ++i) {
+                        if (E.row_offset > 0) {
+                            E.row_offset--;
+                        }
+                    }
+                    cursor_moved = true;
+                } else if (event.bstate & BUTTON5_PRESSED) {
+                    for (int i = 0; i < 3; ++i) {
+                        if (E.row_offset < E.num_lines - 1) {
+                            E.row_offset++;
+                        }
+                    }
+                    cursor_moved = true;
                 } else if (event.bstate & BUTTON1_PRESSED || event.bstate & BUTTON1_CLICKED) {
                     E.cy = event.y + E.row_offset;
-                    
+
                     int target_display_cx = event.x + E.col_offset;
                     int actual_cx = 0;
                     if (E.cy < E.num_lines) {
@@ -1952,16 +2288,12 @@ void editor_process_keypress() {
                         E.cx = line_len;
                     }
                     cursor_moved = true;
-                } else if (event.bstate & BUTTON4_PRESSED) {
-                    for (int i = 0; i < 3; ++i) {
-                        editor_move_cursor(KEY_UP);
-                    }
-                    cursor_moved = true;
-                } else if (event.bstate & BUTTON5_PRESSED) {
-                    for (int i = 0; i < 3; ++i) {
-                        editor_move_cursor(KEY_DOWN);
-                    }
-                    cursor_moved = true;
+                } else if (event.bstate & BUTTON3_PRESSED) {
+                    E.context_menu_active = true;
+                    E.context_menu_x = event.x;
+                    E.context_menu_y = event.y;
+                    E.context_menu_selected_option = 0;
+                    editor_set_status_message("");
                 }
             }
             break;

@@ -1,4 +1,4 @@
-#include "common.h"
+#include"common.h"
 
 extern EditorConfig E;
 extern FileTreeState FT;

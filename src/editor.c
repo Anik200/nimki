@@ -1,4 +1,4 @@
-#include "common.h"
+#include"common.h"
 
 EditorConfig E;
 FileTreeState FT = {NULL, NULL, 0, 0};

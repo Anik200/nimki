@@ -233,7 +233,19 @@ void editor_process_keypress() {
 
         case KEY_MOUSE:
             if (getmouse(&event) == OK) {
-                if (E.file_tree_visible && event.x < FILE_TREE_WIDTH - 1 && (event.bstate & BUTTON1_PRESSED || event.bstate & BUTTON1_CLICKED)) {
+                if (E.file_tree_visible && event.x < FILE_TREE_WIDTH - 1 && (
+#ifdef BUTTON1_PRESSED
+                    event.bstate & BUTTON1_PRESSED
+#else
+                    event.bstate & 1
+#endif
+                    ||
+#ifdef BUTTON1_CLICKED
+                    event.bstate & BUTTON1_CLICKED
+#else
+                    event.bstate & 2
+#endif
+                )) {
                     int tree_row = event.y + E.file_tree_offset;
                     if (tree_row < FT.flat_node_count) {
                         E.file_tree_cursor = tree_row;
@@ -246,7 +258,13 @@ void editor_process_keypress() {
                         editor_refresh_screen();
                         return;
                     }
-                } else if (event.bstate & BUTTON4_PRESSED) {
+                } else if (event.bstate &
+#ifdef BUTTON4_PRESSED
+                    BUTTON4_PRESSED
+#else
+                    0x00200000L  /* Assume this mask for wheel up if defined elsewhere */
+#endif
+                ) {
                     for (int i = 0; i < 3; ++i) {
                         // Allow scrolling up as long as there are more lines above
                         if (E.row_offset > 0) {
@@ -254,7 +272,13 @@ void editor_process_keypress() {
                         }
                     }
                     cursor_moved = true;
-                } else if (event.bstate & BUTTON5_PRESSED) {
+                } else if (event.bstate &
+#ifdef BUTTON5_PRESSED
+                    BUTTON5_PRESSED
+#else
+                    0x00400000L  /* Assume this mask for wheel down if defined elsewhere */
+#endif
+                ) {
                     for (int i = 0; i < 3; ++i) {
                         // Allow scrolling down as long as there are more lines to show below current view
                         // The max row offset should allow showing the end of the file in the bottom of the screen
@@ -264,7 +288,13 @@ void editor_process_keypress() {
                         }
                     }
                     cursor_moved = true;
-                } else if (event.bstate & BUTTON1_PRESSED) {
+                } else if (event.bstate &
+#ifdef BUTTON1_PRESSED
+                    BUTTON1_PRESSED
+#else
+                    1
+#endif
+                ) {
                     // Calculate clicked position - this should just move the cursor
                     int clicked_cy = event.y + E.row_offset;
                     int target_display_cx = event.x + E.col_offset;
@@ -304,7 +334,13 @@ void editor_process_keypress() {
                     // Don't set selection coordinates for single click
 
                     cursor_moved = true;
-                } else if ((event.bstate & REPORT_MOUSE_POSITION) && (event.bstate & BUTTON1_PRESSED)) {
+                } else if ((event.bstate & REPORT_MOUSE_POSITION) && (event.bstate &
+#ifdef BUTTON1_PRESSED
+                    BUTTON1_PRESSED
+#else
+                    1
+#endif
+                )) {
                     // Handle mouse dragging for text selection when mouse moves with left button held down
                     int drag_cy = event.y + E.row_offset;
                     int target_display_cx = event.x + E.col_offset;
@@ -352,7 +388,13 @@ void editor_process_keypress() {
                     E.cy = drag_cy;
                     E.cx = drag_cx;
                     cursor_moved = true;
-                } else if (event.bstate & BUTTON3_PRESSED) {
+                } else if (event.bstate &
+#ifdef BUTTON3_PRESSED
+                    BUTTON3_PRESSED
+#else
+                    4
+#endif
+                ) {
                     E.context_menu_active = true;
                     E.context_menu_x = event.x;
                     E.context_menu_y = event.y;

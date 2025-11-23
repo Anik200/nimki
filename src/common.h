@@ -3,24 +3,24 @@
 
 #define _GNU_SOURCE
 
-#include <ncurses.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <errno.h>
-#include <time.h>
-#include <stdarg.h>
-#include <ctype.h>
-#include <unistd.h>
-#include <sys/wait.h>
-#include <signal.h>
-#include <stdbool.h>
-#include <math.h>
-#include <dirent.h>
-#include <sys/stat.h>
-#include <limits.h>
+#include<ncurses.h>
+#include<stdio.h>
+#include<stdlib.h>
+#include<string.h>
+#include<errno.h>
+#include<time.h>
+#include<stdarg.h>
+#include<ctype.h>
+#include<unistd.h>
+#include<sys/wait.h>
+#include<signal.h>
+#include<stdbool.h>
+#include<math.h>
+#include<dirent.h>
+#include<sys/stat.h>
+#include<limits.h>
 
-#define EDITOR_VERSION "0.1.3"
+#define EDITOR_VERSION "0.1.4"
 #define TAB_STOP 4
 
 #define CTRL(k) ((k) & 0x1f)

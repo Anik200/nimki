@@ -1,7 +1,7 @@
-#include "common.h"
-#include <pwd.h>
-#include <sys/stat.h>
-#include <stdint.h>
+#include"common.h"
+#include<pwd.h>
+#include<sys/stat.h>
+#include<stdint.h>
 
 extern EditorConfig E;
 extern EditorSyntax *E_syntax;

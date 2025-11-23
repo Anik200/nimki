@@ -7,19 +7,39 @@ CC = cc
 # -s: Strip symbol table (reduces executable size)
 CFLAGS = -Wall -Wextra -s
 
-# Linker flags:
-# -lncurses: Link against the ncurses library
-LDFLAGS = -lncurses -lm
+# Check if on macOS and adjust accordingly
+UNAME_S := $(shell uname -s)
+
+# Determine platform-specific settings
+ifeq ($(UNAME_S),Darwin)
+    # On macOS
+    # Try to locate ncurses, with fallbacks for Homebrew installations
+    # On macOS, ncurses is usually available by default, but users with Homebrew
+    # might have it in /usr/local or /opt/homebrew
+    ifneq ("$(wildcard /opt/homebrew/lib/libncurses.dylib)","")
+        # Apple Silicon Macs with Homebrew
+        LDFLAGS = -L/opt/homebrew/lib -lncurses -lm
+        CPPFLAGS = -I/opt/homebrew/include
+    else ifneq ("$(wildcard /usr/local/lib/libncurses.dylib)","")
+        # Intel Macs with Homebrew
+        LDFLAGS = -L/usr/local/lib -lncurses -lm
+        CPPFLAGS = -I/usr/local/include
+    else
+        # Default macOS ncurses
+        LDFLAGS = -lncurses -lm
+    endif
+    INSTALL_DIR = /usr/local/bin
+else
+    # On Linux and other systems
+    LDFLAGS = -lncurses -lm
+    INSTALL_DIR = /usr/local/bin
+endif
 
 # Name of the executable
 TARGET = nimki
 
-# Source files
-SRCS = nimki.c
-
-# Directory where the executable will be installed
-# /usr/local/bin is a common location for locally installed software
-INSTALL_DIR = /usr/local/bin
+# Source files in src directory
+SRCS = src/main.c src/editor.c src/ui.c src/fileops.c src/syntax.c src/input.c src/clipboard.c src/filetree.c src/config.c
 
 # Default target: builds the executable
 all: $(TARGET)

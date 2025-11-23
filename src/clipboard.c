@@ -1,22 +1,17 @@
-#include "common.h"
-
+#include"common.h"
 extern EditorConfig E;
-
 void paste_from_clipboard() {
     editor_set_status_message("Use terminal paste (Ctrl+Shift+V or right-click)");
 }
-
 void editor_copy_selection_to_clipboard() {
     if (!E.selection_active) {
         editor_set_status_message("No text selected to copy.");
         return;
     }
-
     int sel_min_cy = E.selection_start_cy;
     int sel_min_cx = E.selection_start_cx;
     int sel_max_cy = E.selection_end_cy;
     int sel_max_cx = E.selection_end_cx;
-
     if (sel_min_cy > sel_max_cy || (sel_min_cy == sel_max_cy && sel_min_cx > sel_max_cx)) {
         int temp_cy = sel_min_cy;
         int temp_cx = sel_min_cx;
@@ -25,7 +20,6 @@ void editor_copy_selection_to_clipboard() {
         sel_max_cy = temp_cy;
         sel_max_cx = temp_cx;
     }
-
     size_t total_len = 0;
     for (int r = sel_min_cy; r <= sel_max_cy; r++) {
         if (r < 0 || r >= E.num_lines) continue;

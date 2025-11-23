@@ -84,10 +84,8 @@ void editor_copy_selection_to_clipboard() {
     char *clipboard_tool = NULL;
     char *argv[4];
 
-    // First, try to detect platform and use preferred tools
+    // kinda almost lost it here with the copying, carefully mess with it T-T
     bool tool_found = false;
-
-    // On Wayland, prefer wl-copy
     if (getenv("XDG_SESSION_TYPE") != NULL && strcmp(getenv("XDG_SESSION_TYPE"), "wayland") == 0) {
         if (access("/usr/bin/wl-copy", X_OK) == 0) {
             clipboard_tool = "wl-copy";
@@ -105,10 +103,7 @@ void editor_copy_selection_to_clipboard() {
             tool_found = true;
         }
     }
-
-    // If not on Wayland or Wayland tool not found, try other tools in preference order
     if (!tool_found) {
-        // macOS pbcopy
         if (access("/usr/bin/pbcopy", X_OK) == 0) {
             clipboard_tool = "pbcopy";
             argv[0] = "pbcopy";
@@ -117,7 +112,6 @@ void editor_copy_selection_to_clipboard() {
             argv[3] = NULL;
             tool_found = true;
         }
-        // X11 xclip
         else if (access("/usr/bin/xclip", X_OK) == 0) {
             clipboard_tool = "xclip";
             argv[0] = "xclip";
@@ -136,9 +130,7 @@ void editor_copy_selection_to_clipboard() {
         }
     }
 
-    // Try fallback locations if main locations not found
     if (!tool_found) {
-        // Homebrew pbcopy (common on macOS with Apple Silicon)
         if (access("/opt/homebrew/bin/pbcopy", X_OK) == 0) {
             clipboard_tool = "pbcopy";
             argv[0] = "/opt/homebrew/bin/pbcopy";
@@ -155,7 +147,6 @@ void editor_copy_selection_to_clipboard() {
             argv[3] = NULL;
             tool_found = true;
         }
-        // Try wl-copy again in case it's in different path
         else if (access("/bin/wl-copy", X_OK) == 0) {
             clipboard_tool = "wl-copy";
             argv[0] = "wl-copy";

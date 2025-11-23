@@ -5,7 +5,7 @@ extern EditorSyntax *E_syntax;
 extern FileTreeState FT;
 
 EditorSyntax *EditorSyntaxes[];
-
+// this ones for c and c++
 char *C_HL_extensions[] = { ".c", ".h", ".cpp", ".hpp", ".cc", NULL };
 char *C_HL_keywords[] = {
     "switch", "if", "while", "for", "break", "continue", "return", "else",
@@ -24,7 +24,7 @@ EditorSyntax C_syntax = {
     "/*",
     "*/",
 };
-
+// this ones for shell scripts (bash)
 char *SH_HL_extensions[] = { ".sh", NULL };
 char *SH_HL_keywords[] = {
     "if", "then", "else", "fi", "for", "in", "do", "done", "while", "until",
@@ -41,7 +41,7 @@ EditorSyntax SH_syntax = {
     NULL,
     NULL,
 };
-
+// this is for java iskript
 char *JS_HL_extensions[] = { ".js", NULL };
 char *JS_HL_keywords[] = {
     "function", "var", "let", "const", "if", "else", "for", "while", "do",
@@ -59,7 +59,7 @@ EditorSyntax JS_syntax = {
     "/*",
     "*/",
 };
-
+// now we have html
 char *HTML_HL_extensions[] = { ".html", ".htm", NULL };
 char *HTML_HL_keywords[] = {
     "html", "head", "body", "title", "meta", "link", "script", "style", "div",
@@ -76,7 +76,7 @@ EditorSyntax HTML_syntax = {
     "<!--",
     "-->",
 };
-
+// this is for cascading stylesheets
 char *CSS_HL_extensions[] = { ".css", NULL };
 char *CSS_HL_keywords[] = {
     "color", "background-color", "font-size", "margin", "padding", "border",
@@ -94,7 +94,7 @@ EditorSyntax CSS_syntax = {
     "/*",
     "*/",
 };
-
+// thsi is for html
 char *XML_HL_extensions[] = { ".xml", NULL };
 char *XML_HL_keywords[] = {
     "xml", "version", "encoding", "root", "element", "attribute", "value",

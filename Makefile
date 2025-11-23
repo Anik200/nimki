@@ -10,8 +10,16 @@ CFLAGS = -Wall -Wextra -s
 # Check if on macOS and adjust accordingly
 UNAME_S := $(shell uname -s)
 
+# Check if on NixOS
+IS_NIXOS := $(shell if [ -e /etc/NIXOS ]; then echo "1"; elif [ -d /nix ]; then echo "1"; else echo "0"; fi)
+
 # Determine platform-specific settings
-ifeq ($(UNAME_S),Darwin)
+ifeq ($(IS_NIXOS), 1)
+    # On NixOS, we need to handle the ncurses library differently
+    # NixOS typically has ncurses with different library linking requirements
+    LDFLAGS = -ltinfow -lncursesw -lm
+    INSTALL_DIR = /run/current-system/sw/bin
+else ifeq ($(UNAME_S),Darwin)
     # On macOS
     # Try to locate ncurses, with fallbacks for Homebrew installations
     # On macOS, ncurses is usually available by default, but users with Homebrew
@@ -31,7 +39,15 @@ ifeq ($(UNAME_S),Darwin)
     INSTALL_DIR = /usr/local/bin
 else
     # On Linux and other systems
-    LDFLAGS = -lncurses -lm
+    # Some systems have tinfo as a separate library
+    ifeq ($(shell pkg-config --exists ncurses && echo 1), 1)
+        LDFLAGS = $(shell pkg-config --libs ncurses) -lm
+    else ifeq ($(shell pkg-config --exists ncursesw && echo 1), 1)
+        LDFLAGS = $(shell pkg-config --libs ncursesw) -lm
+    else
+        # Default fallback
+        LDFLAGS = -ltinfo -lncurses -lm
+    endif
     INSTALL_DIR = /usr/local/bin
 endif
 

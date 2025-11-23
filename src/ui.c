@@ -77,8 +77,7 @@ void editor_draw_rows() {
 
                 if ((display_col - E.col_offset) >= text_cols) break;
 
-                // SELECTION DISABLED: No text highlighting to prevent "everything blue" issue
-                bool is_selected = false;  // Always false - selection highlighting is disabled
+                bool is_selected = false;
 
                 if (is_selected && has_colors()) {
                     if (HL_SELECTION != current_color_pair) {

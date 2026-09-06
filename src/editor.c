@@ -343,21 +343,15 @@ int get_cx_display() {
 }
 
 void editor_scroll() {
-    // Only auto-scroll if cursor is completely out of view
-    // Don't auto-scroll if cursor is visible anywhere in the current view
     int top_of_view = E.row_offset;
     int bottom_of_view = E.row_offset + E.screen_rows - 1;
 
-    // Only adjust scrolling if cursor is outside the visible range
     if (E.cy < top_of_view) {
-        // Cursor is above visible area, scroll view up to show it
         E.row_offset = E.cy;
     } else if (E.cy > bottom_of_view) {
-        // Cursor is below visible area, scroll view down to show it
         E.row_offset = E.cy - E.screen_rows + 1;
     }
 
-    // Ensure row_offset is valid
     if (E.row_offset < 0) E.row_offset = 0;
     int max_row_offset = (E.num_lines > E.screen_rows) ? E.num_lines - E.screen_rows : 0;
     if (max_row_offset < 0) max_row_offset = 0;

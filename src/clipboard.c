@@ -153,59 +153,42 @@ void editor_copy_selection_to_clipboard() {
     }
     selected_text[current_offset] = '\0';
 
-    // 1. Always emit OSC 52 escape sequence (works over SSH, Windows Terminal, iTerm2, Alacritty, Kitty, etc.)
     copy_via_osc52(selected_text, current_offset);
 
-    // 2. Also copy to native OS clipboard tool if present (Wayland, X11, macOS, Windows)
     bool tool_copied = false;
-    const char *tool_name = NULL;
-
-    // Check Wayland
     if (getenv("WAYLAND_DISPLAY") != NULL || (getenv("XDG_SESSION_TYPE") && strcmp(getenv("XDG_SESSION_TYPE"), "wayland") == 0)) {
         if (access("/usr/bin/wl-copy", X_OK) == 0 || access("/bin/wl-copy", X_OK) == 0) {
             char *argv[] = {"wl-copy", NULL};
             tool_copied = copy_via_command("wl-copy", argv, selected_text, current_offset);
-            if (tool_copied) tool_name = "wl-copy";
         }
     }
 
-    // Check X11
     if (!tool_copied && getenv("DISPLAY") != NULL) {
         if (access("/usr/bin/xclip", X_OK) == 0 || access("/bin/xclip", X_OK) == 0) {
             char *argv[] = {"xclip", "-selection", "clipboard", NULL};
             tool_copied = copy_via_command("xclip", argv, selected_text, current_offset);
-            if (tool_copied) tool_name = "xclip";
         } else if (access("/usr/bin/xsel", X_OK) == 0 || access("/bin/xsel", X_OK) == 0) {
             char *argv[] = {"xsel", "--clipboard", "--input", NULL};
             tool_copied = copy_via_command("xsel", argv, selected_text, current_offset);
-            if (tool_copied) tool_name = "xsel";
         }
     }
 
-    // Check macOS
     if (!tool_copied) {
         if (access("/usr/bin/pbcopy", X_OK) == 0 || access("/opt/homebrew/bin/pbcopy", X_OK) == 0 || access("/usr/local/bin/pbcopy", X_OK) == 0) {
             char *argv[] = {"pbcopy", NULL};
             tool_copied = copy_via_command("pbcopy", argv, selected_text, current_offset);
-            if (tool_copied) tool_name = "pbcopy";
         }
     }
 
-    // Check Windows (clip.exe)
     if (!tool_copied) {
         if (access("/c/Windows/System32/clip.exe", X_OK) == 0 || access("/mnt/c/Windows/System32/clip.exe", X_OK) == 0) {
             char *clip_path = (access("/mnt/c/Windows/System32/clip.exe", X_OK) == 0) ? "/mnt/c/Windows/System32/clip.exe" : "/c/Windows/System32/clip.exe";
             char *argv[] = {clip_path, NULL};
-            tool_copied = copy_via_command(clip_path, argv, selected_text, current_offset);
-            if (tool_copied) tool_name = "clip.exe";
+            copy_via_command(clip_path, argv, selected_text, current_offset);
         }
     }
 
-    if (tool_copied) {
-        editor_set_status_message("Copied %zu bytes (clipboard tool: %s + terminal).", current_offset, tool_name);
-    } else {
-        editor_set_status_message("Copied %zu bytes to clipboard.", current_offset);
-    }
+    editor_set_status_message("Copied %zu bytes.", current_offset);
 
     free(selected_text);
     selected_text = NULL;

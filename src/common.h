@@ -122,7 +122,6 @@ typedef struct {
 extern FileTreeState FT;
 extern EditorSyntax *E_syntax;
 
-// Function declarations
 void init_editor();
 void cleanup_editor();
 void editor_read_file(const char *filename);

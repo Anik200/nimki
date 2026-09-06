@@ -123,7 +123,7 @@ void editor_process_keypress() {
         for (int i = 0; i < E.num_lines; i++) {
             editor_update_syntax(i);
         }
-        editor_refresh_screen(); // Refresh immediately when selection is cleared
+        editor_refresh_screen();
     }
 
     if (E.find_active && c != KEY_UP && c != KEY_DOWN && c != CTRL('f')) {
@@ -322,7 +322,6 @@ void editor_process_keypress() {
                     || (event.bstate & BUTTON4_CLICKED)
 #endif
                 ) {
-                    // Wheel up: scroll up by 3 lines and keep cursor visible
                     int scroll_amount = 3;
                     while (scroll_amount-- > 0 && E.row_offset > 0) {
                         E.row_offset--;
@@ -345,7 +344,6 @@ void editor_process_keypress() {
                     || (event.bstate & BUTTON5_CLICKED)
 #endif
                 ) {
-                    // Wheel down: scroll down by 3 lines and keep cursor visible
                     int max_offset = E.num_lines > E.screen_rows ? E.num_lines - E.screen_rows : 0;
                     int scroll_amount = 3;
                     while (scroll_amount-- > 0 && E.row_offset < max_offset) {
@@ -359,7 +357,6 @@ void editor_process_keypress() {
                     if (E.cx > line_len) E.cx = line_len;
                     cursor_moved = true;
                 } else if (event.bstate & REPORT_MOUSE_POSITION) {
-                    // Mouse dragging with button held down for selection
                     if (event.y >= 0 && event.y < E.screen_rows) {
                         int drag_cy, drag_cx;
                         screen_to_editor_coords(event.x, event.y, &drag_cy, &drag_cx);
@@ -390,7 +387,6 @@ void editor_process_keypress() {
 #endif
                     (event.bstate & 1) || (event.bstate & 2)
                 ) {
-                    // Snap cursor directly to clicked position
                     if (event.y >= 0 && event.y < E.screen_rows) {
                         screen_to_editor_coords(event.x, event.y, &E.cy, &E.cx);
                         E.selection_active = false;

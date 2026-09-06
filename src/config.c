@@ -169,7 +169,6 @@ void create_default_config_file(const char* config_path) {
 void initialize_syntax_colors() {
     load_config();
 
-    // Reinitialize color pairs with loaded values
     if (has_colors()) {
         start_color();
         use_default_colors();

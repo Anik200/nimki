@@ -196,7 +196,6 @@ void toggle_file_tree() {
             }
         }
     }
-    // Always refresh screen when toggling file tree to prevent rendering issues
     editor_refresh_screen();
 }
 

@@ -68,6 +68,7 @@ void init_editor() {
     keypad(stdscr, TRUE);
 
     mousemask(ALL_MOUSE_EVENTS | REPORT_MOUSE_POSITION, NULL);
+    mouseinterval(0);
 
     signal(SIGWINCH, handle_winch);
 

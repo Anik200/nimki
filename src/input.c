@@ -25,6 +25,54 @@ void file_tree_open_file();
 void toggle_file_tree();
 void draw_file_tree();
 
+static void screen_to_editor_coords(int screen_x, int screen_y, int *out_cy, int *out_cx) {
+    int x_offset = E.file_tree_visible ? FILE_TREE_WIDTH : 0;
+    int line_num_width = 0;
+    if (E.show_line_numbers) {
+        int num_digits = 1;
+        if (E.num_lines > 0) {
+            num_digits = (int)log10(E.num_lines) + 1;
+        }
+        line_num_width = num_digits + 1;
+    }
+
+    int clicked_cy = screen_y + E.row_offset;
+    if (clicked_cy < 0) clicked_cy = 0;
+    if (clicked_cy >= E.num_lines) {
+        clicked_cy = E.num_lines > 0 ? E.num_lines - 1 : 0;
+    }
+
+    int clicked_cx = 0;
+    int text_screen_x = screen_x - (x_offset + line_num_width);
+    if (text_screen_x <= 0) {
+        clicked_cx = 0;
+    } else {
+        int target_display_cx = text_screen_x + E.col_offset;
+        if (clicked_cy < E.num_lines) {
+            EditorLine *line = &E.lines[clicked_cy];
+            int current_display_cx = 0;
+            for (int char_idx = 0; char_idx < (int)line->len; char_idx++) {
+                int char_display_width = 1;
+                if (line->text[char_idx] == '\t') {
+                    char_display_width = TAB_STOP - (current_display_cx % TAB_STOP);
+                }
+                if (target_display_cx < current_display_cx + char_display_width) {
+                    clicked_cx = char_idx;
+                    break;
+                }
+                current_display_cx += char_display_width;
+                clicked_cx = char_idx + 1;
+            }
+            if (clicked_cx > (int)line->len) {
+                clicked_cx = (int)line->len;
+            }
+        }
+    }
+
+    *out_cy = clicked_cy;
+    *out_cx = clicked_cx;
+}
+
 void editor_process_keypress() {
     MEVENT event;
     int c = getch();
@@ -63,7 +111,8 @@ void editor_process_keypress() {
         }
     }
 
-    bool current_key_is_selection_or_cursor_move = (c == CTRL('k') || c == KEY_UP || c == KEY_DOWN ||
+    bool current_key_is_selection_or_cursor_move = (c == CTRL('k') || c == CTRL('a') || c == KEY_MOUSE ||
+                                                     c == KEY_UP || c == KEY_DOWN ||
                                                      c == KEY_LEFT || c == KEY_RIGHT || c == KEY_HOME ||
                                                      c == KEY_END || c == KEY_PPAGE || c == KEY_NPAGE);
 
@@ -130,7 +179,16 @@ void editor_process_keypress() {
             break;
 
         case CTRL('k'):
-            editor_set_status_message("Use terminal copy/paste (Ctrl+Shift+C/V or right-click)");
+            if (!E.selection_active) {
+                E.selection_active = true;
+                E.selection_start_cy = E.cy;
+                E.selection_start_cx = E.cx;
+                E.selection_end_cy = E.cy;
+                E.selection_end_cx = E.cx;
+                editor_set_status_message("Selection mode active. Move cursor to select, press Ctrl+K to copy.");
+            } else {
+                editor_copy_selection_to_clipboard();
+            }
             cursor_moved = true;
             break;
 
@@ -235,16 +293,12 @@ void editor_process_keypress() {
             if (getmouse(&event) == OK) {
                 if (E.file_tree_visible && event.x < FILE_TREE_WIDTH - 1 && (
 #ifdef BUTTON1_PRESSED
-                    event.bstate & BUTTON1_PRESSED
-#else
-                    event.bstate & 1
+                    (event.bstate & BUTTON1_PRESSED) ||
 #endif
-                    ||
 #ifdef BUTTON1_CLICKED
-                    event.bstate & BUTTON1_CLICKED
-#else
-                    event.bstate & 2
+                    (event.bstate & BUTTON1_CLICKED) ||
 #endif
+                    (event.bstate & 1) || (event.bstate & 2)
                 )) {
                     int tree_row = event.y + E.file_tree_offset;
                     if (tree_row < FT.flat_node_count) {
@@ -258,142 +312,96 @@ void editor_process_keypress() {
                         editor_refresh_screen();
                         return;
                     }
-                } else if (event.bstate &
+                } else if (
 #ifdef BUTTON4_PRESSED
-                    BUTTON4_PRESSED
-#else
-                    0x00200000L  /* Assume this mask for wheel up if defined elsewhere */
+                    (event.bstate & BUTTON4_PRESSED) ||
 #endif
+#ifdef BUTTON4_CLICKED
+                    (event.bstate & BUTTON4_CLICKED) ||
+#endif
+                    (event.bstate & 0x00200000L) || (event.bstate & 0x00080000L)
                 ) {
-                    for (int i = 0; i < 3; ++i) {
-                        // Allow scrolling up as long as there are more lines above
-                        if (E.row_offset > 0) {
-                            E.row_offset--;
-                        }
+                    // Wheel up: scroll up by 3 lines and keep cursor visible
+                    int scroll_amount = 3;
+                    while (scroll_amount-- > 0 && E.row_offset > 0) {
+                        E.row_offset--;
                     }
+                    if (E.cy >= E.row_offset + E.screen_rows) {
+                        E.cy = E.row_offset + E.screen_rows - 1;
+                    }
+                    if (E.cy < 0) E.cy = 0;
+                    if (E.cy >= E.num_lines) E.cy = E.num_lines > 0 ? E.num_lines - 1 : 0;
+                    int line_len = (E.cy < E.num_lines) ? (int)E.lines[E.cy].len : 0;
+                    if (E.cx > line_len) E.cx = line_len;
                     cursor_moved = true;
-                } else if (event.bstate &
+                } else if (
 #ifdef BUTTON5_PRESSED
-                    BUTTON5_PRESSED
-#else
-                    0x00400000L  /* Assume this mask for wheel down if defined elsewhere */
+                    (event.bstate & BUTTON5_PRESSED) ||
 #endif
+#ifdef BUTTON5_CLICKED
+                    (event.bstate & BUTTON5_CLICKED) ||
+#endif
+                    (event.bstate & 0x00400000L) || (event.bstate & 0x00100000L)
                 ) {
-                    for (int i = 0; i < 3; ++i) {
-                        // Allow scrolling down as long as there are more lines to show below current view
-                        // The max row offset should allow showing the end of the file in the bottom of the screen
-                        int max_offset = E.num_lines > E.screen_rows ? E.num_lines - E.screen_rows : 0;
-                        if (E.row_offset < max_offset) {
-                            E.row_offset++;
-                        }
+                    // Wheel down: scroll down by 3 lines and keep cursor visible
+                    int max_offset = E.num_lines > E.screen_rows ? E.num_lines - E.screen_rows : 0;
+                    int scroll_amount = 3;
+                    while (scroll_amount-- > 0 && E.row_offset < max_offset) {
+                        E.row_offset++;
                     }
+                    if (E.cy < E.row_offset) {
+                        E.cy = E.row_offset;
+                    }
+                    if (E.cy >= E.num_lines) E.cy = E.num_lines > 0 ? E.num_lines - 1 : 0;
+                    int line_len = (E.cy < E.num_lines) ? (int)E.lines[E.cy].len : 0;
+                    if (E.cx > line_len) E.cx = line_len;
                     cursor_moved = true;
-                } else if (event.bstate &
+                } else if (event.bstate & REPORT_MOUSE_POSITION) {
+                    // Mouse dragging with button held down for selection
+                    if (event.y >= 0 && event.y < E.screen_rows) {
+                        int drag_cy, drag_cx;
+                        screen_to_editor_coords(event.x, event.y, &drag_cy, &drag_cx);
+
+                        if (!E.selection_active) {
+                            E.selection_active = true;
+                            E.selection_start_cy = E.cy;
+                            E.selection_start_cx = E.cx;
+                        }
+                        E.selection_end_cy = drag_cy;
+                        E.selection_end_cx = drag_cx;
+                        E.cy = drag_cy;
+                        E.cx = drag_cx;
+                        cursor_moved = true;
+                    }
+                } else if (
 #ifdef BUTTON1_PRESSED
-                    BUTTON1_PRESSED
-#else
-                    1
+                    (event.bstate & BUTTON1_PRESSED) ||
 #endif
+#ifdef BUTTON1_CLICKED
+                    (event.bstate & BUTTON1_CLICKED) ||
+#endif
+#ifdef BUTTON1_DOUBLE_CLICKED
+                    (event.bstate & BUTTON1_DOUBLE_CLICKED) ||
+#endif
+#ifdef BUTTON1_RELEASED
+                    (event.bstate & BUTTON1_RELEASED) ||
+#endif
+                    (event.bstate & 1) || (event.bstate & 2)
                 ) {
-                    // Calculate clicked position - this should just move the cursor
-                    int clicked_cy = event.y + E.row_offset;
-                    int target_display_cx = event.x + E.col_offset;
-                    int clicked_cx = 0;
-
-                    if (clicked_cy < E.num_lines) {
-                        EditorLine *line = &E.lines[clicked_cy];
-                        int current_display_cx = 0;
-                        for (int char_idx = 0; char_idx < (int)line->len; char_idx++) {
-                            int char_display_width = 1;
-                            if (line->text[char_idx] == '\t') {
-                                char_display_width = TAB_STOP - (current_display_cx % TAB_STOP);
-                            }
-                            if (current_display_cx + char_display_width > target_display_cx) {
-                                break;
-                            }
-                            current_display_cx += char_display_width;
-                            clicked_cx = char_idx + 1;
-                        }
+                    // Snap cursor directly to clicked position
+                    if (event.y >= 0 && event.y < E.screen_rows) {
+                        screen_to_editor_coords(event.x, event.y, &E.cy, &E.cx);
+                        E.selection_active = false;
+                        cursor_moved = true;
                     }
-
-                    if (clicked_cy >= E.num_lines) {
-                        clicked_cy = E.num_lines > 0 ? E.num_lines - 1 : 0;
-                    }
-                    EditorLine *line = (clicked_cy < E.num_lines) ? &E.lines[clicked_cy] : NULL;
-                    int line_len = line ? (int)line->len : 0;
-                    if (clicked_cx > line_len) {
-                        clicked_cx = line_len;
-                    }
-
-                    // Store the click location for potential dragging
-                    E.cy = clicked_cy;
-                    E.cx = clicked_cx;
-
-                    // For single click, immediately disable selection
-                    E.selection_active = false;
-                    // Don't set selection coordinates for single click
-
-                    cursor_moved = true;
-                } else if ((event.bstate & REPORT_MOUSE_POSITION) && (event.bstate &
-#ifdef BUTTON1_PRESSED
-                    BUTTON1_PRESSED
-#else
-                    1
-#endif
-                )) {
-                    // Handle mouse dragging for text selection when mouse moves with left button held down
-                    int drag_cy = event.y + E.row_offset;
-                    int target_display_cx = event.x + E.col_offset;
-                    int drag_cx = 0;
-
-                    if (drag_cy < E.num_lines) {
-                        EditorLine *line = &E.lines[drag_cy];
-                        int current_display_cx = 0;
-                        for (int char_idx = 0; char_idx < (int)line->len; char_idx++) {
-                            int char_display_width = 1;
-                            if (line->text[char_idx] == '\t') {
-                                char_display_width = TAB_STOP - (current_display_cx % TAB_STOP);
-                            }
-                            if (current_display_cx + char_display_width > target_display_cx) {
-                                break;
-                            }
-                            current_display_cx += char_display_width;
-                            drag_cx = char_idx + 1;
-                        }
-                    }
-
-                    if (drag_cy >= E.num_lines) {
-                        drag_cy = E.num_lines > 0 ? E.num_lines - 1 : 0;
-                    }
-                    EditorLine *line = (drag_cy < E.num_lines) ? &E.lines[drag_cy] : NULL;
-                    int line_len = line ? (int)line->len : 0;
-                    if (drag_cx > line_len) {
-                        drag_cx = line_len;
-                    }
-
-                    // Enable selection and update the end position
-                    E.selection_active = true;
-                    // If we just started dragging, set the initial position as the start
-                    if (E.selection_start_cy == 0 && E.selection_start_cx == 0 &&
-                        E.selection_end_cy == 0 && E.selection_end_cx == 0) {
-                        // In practice, we should store the original click position, but for now
-                        // assume the start of selection is the position where dragging started
-                        E.selection_start_cy = E.cy;  // Position when drag started
-                        E.selection_start_cx = E.cx;
-                    }
-
-                    // Update the end position of the selection
-                    E.selection_end_cy = drag_cy;
-                    E.selection_end_cx = drag_cx;
-                    E.cy = drag_cy;
-                    E.cx = drag_cx;
-                    cursor_moved = true;
-                } else if (event.bstate &
+                } else if (
 #ifdef BUTTON3_PRESSED
-                    BUTTON3_PRESSED
-#else
-                    4
+                    (event.bstate & BUTTON3_PRESSED) ||
 #endif
+#ifdef BUTTON3_CLICKED
+                    (event.bstate & BUTTON3_CLICKED) ||
+#endif
+                    (event.bstate & 4)
                 ) {
                     E.context_menu_active = true;
                     E.context_menu_x = event.x;

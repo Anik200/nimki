@@ -394,18 +394,10 @@ void editor_del_char() {
             }
 
             for (int r = sel_min_cy; r <= sel_max_cy; r++) {
-                if (r != sel_min_cy || (r == sel_min_cy && sel_min_cy != sel_max_cy)) {
-                    free(E.lines[r].text);
-                    E.lines[r].text = NULL;
-                    free(E.lines[r].hl);
-                    E.lines[r].hl = NULL;
-                }
-            }
-            if (sel_min_cy != sel_max_cy) {
-                free(start_line_orig->text);
-                start_line_orig->text = NULL;
-                free(start_line_orig->hl);
-                start_line_orig->hl = NULL;
+                free(E.lines[r].text);
+                E.lines[r].text = NULL;
+                free(E.lines[r].hl);
+                E.lines[r].hl = NULL;
             }
 
             free(E.lines);

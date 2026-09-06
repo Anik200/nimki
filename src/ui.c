@@ -78,6 +78,25 @@ void editor_draw_rows() {
                 if ((display_col - E.col_offset) >= text_cols) break;
 
                 bool is_selected = false;
+                if (E.selection_active) {
+                    if (filerow >= sel_min_cy && filerow <= sel_max_cy) {
+                        if (filerow == sel_min_cy && filerow == sel_max_cy) {
+                            if (i >= sel_min_cx && i < sel_max_cx) {
+                                is_selected = true;
+                            }
+                        } else if (filerow == sel_min_cy) {
+                            if (i >= sel_min_cx) {
+                                is_selected = true;
+                            }
+                        } else if (filerow == sel_max_cy) {
+                            if (i < sel_max_cx) {
+                                is_selected = true;
+                            }
+                        } else {
+                            is_selected = true;
+                        }
+                    }
+                }
 
                 if (is_selected && has_colors()) {
                     if (HL_SELECTION != current_color_pair) {

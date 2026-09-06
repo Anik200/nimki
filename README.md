@@ -9,12 +9,12 @@ Nimki is a simple text editor written in C.
 
 
 # Installation
-## Dependecies
+## Dependencies
      ncurses
      gcc
      make
      
-1. install the Dependecies
+1. install the Dependencies
 2. Clone this repo and build the binary
 ####
      git clone https://github.com/Anik200/nimki/
@@ -22,12 +22,15 @@ Nimki is a simple text editor written in C.
      sudo make install
      
 # Usage
+- click anywhere with mouse to snap cursor
+- scroll view with mouse wheel
 - save files with [ctrl + s]
 - exit the editor with [ctrl + q] or [ctrl + c]
-- find text with [ctrl + w] 
+- find text with [ctrl + w] or [ctrl + f]
 - undo with [ctrl + z]
 - toggle line numbers with [ctrl + t]
 - toggle file tree with [ctrl + n]
-- select text with shift + mouse left click and [ctrl + shift + c] to copy
+- select and copy text with [ctrl + k] (or mouse drag to select, [ctrl + k] to copy)
+- select all with [ctrl + a]
      
 # Get Nimkified!

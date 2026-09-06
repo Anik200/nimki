@@ -314,12 +314,13 @@ void editor_process_keypress() {
                     }
                 } else if (
 #ifdef BUTTON4_PRESSED
-                    (event.bstate & BUTTON4_PRESSED) ||
+                    (event.bstate & BUTTON4_PRESSED)
+#else
+                    0
 #endif
 #ifdef BUTTON4_CLICKED
-                    (event.bstate & BUTTON4_CLICKED) ||
+                    || (event.bstate & BUTTON4_CLICKED)
 #endif
-                    (event.bstate & 0x00200000L) || (event.bstate & 0x00080000L)
                 ) {
                     // Wheel up: scroll up by 3 lines and keep cursor visible
                     int scroll_amount = 3;
@@ -336,12 +337,13 @@ void editor_process_keypress() {
                     cursor_moved = true;
                 } else if (
 #ifdef BUTTON5_PRESSED
-                    (event.bstate & BUTTON5_PRESSED) ||
+                    (event.bstate & BUTTON5_PRESSED)
+#else
+                    0
 #endif
 #ifdef BUTTON5_CLICKED
-                    (event.bstate & BUTTON5_CLICKED) ||
+                    || (event.bstate & BUTTON5_CLICKED)
 #endif
-                    (event.bstate & 0x00400000L) || (event.bstate & 0x00100000L)
                 ) {
                     // Wheel down: scroll down by 3 lines and keep cursor visible
                     int max_offset = E.num_lines > E.screen_rows ? E.num_lines - E.screen_rows : 0;

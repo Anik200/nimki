@@ -1,0 +1,83 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Windows Binary
+        shell: bash
+        run: |
+          git clone --depth 1 https://github.com/wmcbrine/PDCurses.git vendor/pdcurses
+          make -C vendor/pdcurses/wincon WIDE=N
+          gcc src/main.c src/editor.c src/ui.c src/fileops.c src/syntax.c src/input.c src/clipboard.c src/filetree.c src/config.c -o nimki.exe -Wall -Wextra -s -Isrc -Ivendor/pdcurses vendor/pdcurses/wincon/pdcurses.a
+
+      - name: Package Windows Release
+        shell: pwsh
+        run: |
+          Compress-Archive -Path nimki.exe, README.md, LICENSE -DestinationPath nimki-windows-x64.zip
+          $hash = (Get-FileHash nimki-windows-x64.zip -Algorithm SHA256).Hash
+          echo "SHA256: $hash"
+
+      - name: Upload Windows Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nimki-windows-x64
+          path: nimki-windows-x64.zip
+
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libncurses-dev
+
+      - name: Build Linux Binary
+        run: make
+
+      - name: Package Linux Release
+        run: |
+          tar -czvf nimki-linux-x64.tar.gz nimki README.md LICENSE
+
+      - name: Upload Linux Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nimki-linux-x64
+          path: nimki-linux-x64.tar.gz
+
+  release:
+    needs: [build-windows, build-linux]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: nimki-windows-x64
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: nimki-linux-x64
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            nimki-windows-x64.zip
+            nimki-linux-x64.tar.gz
+          draft: false
+          prerelease: false

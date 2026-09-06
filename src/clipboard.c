@@ -7,6 +7,23 @@ void paste_from_clipboard() {
     editor_set_status_message("Use terminal paste (Ctrl+Shift+V or right-click)");
 }
 
+#ifdef _WIN32
+static void copy_to_windows_clipboard(const char *text, size_t len) {
+    if (!OpenClipboard(NULL)) return;
+    EmptyClipboard();
+    HGLOBAL hGlob = GlobalAlloc(GMEM_MOVEABLE, len + 1);
+    if (hGlob) {
+        char *pGlob = (char *)GlobalLock(hGlob);
+        if (pGlob) {
+            memcpy(pGlob, text, len);
+            pGlob[len] = '\0';
+            GlobalUnlock(hGlob);
+            SetClipboardData(CF_TEXT, hGlob);
+        }
+    }
+    CloseClipboard();
+}
+#else
 static char *base64_encode(const unsigned char *data, size_t input_length) {
     static const char encoding_table[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     size_t output_length = 4 * ((input_length + 2) / 3);
@@ -79,6 +96,7 @@ static bool copy_via_command(const char *cmd, char *const argv[], const char *te
         return (WIFEXITED(status) && WEXITSTATUS(status) == 0);
     }
 }
+#endif
 
 void editor_copy_selection_to_clipboard() {
     if (!E.selection_active) {
@@ -153,6 +171,9 @@ void editor_copy_selection_to_clipboard() {
     }
     selected_text[current_offset] = '\0';
 
+#ifdef _WIN32
+    copy_to_windows_clipboard(selected_text, current_offset);
+#else
     copy_via_osc52(selected_text, current_offset);
 
     bool tool_copied = false;
@@ -187,6 +208,7 @@ void editor_copy_selection_to_clipboard() {
             copy_via_command(clip_path, argv, selected_text, current_offset);
         }
     }
+#endif
 
     editor_set_status_message("Copied %zu bytes.", current_offset);
 

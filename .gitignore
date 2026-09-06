@@ -1,0 +1,7 @@
+nimki
+nimki.exe
+*.o
+*.a
+vendor/
+build/
+dist/

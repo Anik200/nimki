@@ -70,7 +70,9 @@ void init_editor() {
     mousemask(ALL_MOUSE_EVENTS | REPORT_MOUSE_POSITION, NULL);
     mouseinterval(0);
 
+#ifdef SIGWINCH
     signal(SIGWINCH, handle_winch);
+#endif
 
     getmaxyx(stdscr, E.screen_rows, E.screen_cols);
     E.screen_rows -= 2;

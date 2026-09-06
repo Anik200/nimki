@@ -3,22 +3,32 @@
 
 #define _GNU_SOURCE
 
-#include<ncurses.h>
-#include<stdio.h>
-#include<stdlib.h>
-#include<string.h>
-#include<errno.h>
-#include<time.h>
-#include<stdarg.h>
-#include<ctype.h>
-#include<unistd.h>
-#include<sys/wait.h>
-#include<signal.h>
-#include<stdbool.h>
-#include<math.h>
-#include<dirent.h>
-#include<sys/stat.h>
-#include<limits.h>
+#ifdef _WIN32
+#define NCURSES_MOUSE_VERSION 2
+#include <curses.h>
+#define getmouse(x) nc_getmouse(x)
+#include <windows.h>
+#include <direct.h>
+#include <io.h>
+#define mkdir(path, mode) _mkdir(path)
+#else
+#include <ncurses.h>
+#include <unistd.h>
+#include <sys/wait.h>
+#endif
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <errno.h>
+#include <time.h>
+#include <stdarg.h>
+#include <ctype.h>
+#include <signal.h>
+#include <stdbool.h>
+#include <math.h>
+#include <dirent.h>
+#include <sys/stat.h>
+#include <limits.h>
 
 #define EDITOR_VERSION "0.1.4"
 #define TAB_STOP 4

@@ -1,5 +1,7 @@
 #include"common.h"
+#ifndef _WIN32
 #include<pwd.h>
+#endif
 #include<sys/stat.h>
 #include<stdint.h>
 
@@ -133,6 +135,11 @@ void load_config() {
 }
 
 char* get_home_directory() {
+#ifdef _WIN32
+    char *home_dir = getenv("USERPROFILE");
+    if (!home_dir) home_dir = getenv("HOME");
+    return home_dir;
+#else
     char *home_dir = getenv("HOME");
     if (!home_dir) {
         struct passwd *pw = getpwuid(getuid());
@@ -141,6 +148,7 @@ char* get_home_directory() {
         }
     }
     return home_dir;
+#endif
 }
 
 void create_default_config_file(const char* config_path) {

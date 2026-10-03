@@ -13,13 +13,16 @@ Nimki is a simple text editor written in C.
      ncurses
      gcc
      make
-     
+# Option A, unix based systems:    
 1. install the Dependencies
 2. Clone this repo and build the binary
 ####
      git clone https://github.com/Anik200/nimki/
      cd nimki
      sudo make install
+# Option B, windows:
+####
+     winget install Anik200.nimki
      
 # Usage
 - click anywhere with mouse to snap cursor

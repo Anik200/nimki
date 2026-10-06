@@ -1,6 +1,6 @@
-# ================================================================
-# Nimki Configuration File (.nimkirc)
-# ================================================================
+# ==================================== #
+# Nimki Configuration File (.nimkirc)  #
+# ==================================== #
 
 # Theme Selection
 # Built-in themes:
@@ -8,6 +8,7 @@
 #   one-dark, solarized-dark, solarized-light, cyberpunk, matrix, default
 theme=dracula
 
+# Did you know that i really like eating nimki, they are pretty good
 # Background Transparency / Terminal Background
 # Set to 'true' to ignore the theme background and use your terminal's
 # native background color (supports transparency and blur).

@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>nimki — terminal text editor</title>
+  <meta name="description" content="Nimki is a simple, lightweight CLI text editor written in C with an interactive file tree, syntax highlighting, and mouse support.">
+
+  <!-- Open Graph -->
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Nimki — CLI Text Editor">
+  <meta property="og:description" content="A simple, fast terminal text editor in pure C99 with file tree, mouse support, and syntax highlighting.">
+  <meta property="og:image" content="https://github.com/user-attachments/assets/a848845e-f84d-4dff-8592-0675947cb938">
+
+  <!-- Favicon -->
+  <link rel="icon" type="image/png" href="https://github.com/user-attachments/assets/4a0105ec-67ad-49d3-bc9e-3e00130069b3">
+
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <!-- =========================================================================
+       PURE CLI NCURSES TERMINAL
+       ========================================================================= -->
+  <div class="terminal-screen">
+
+    <!-- Top Terminal Meta Header -->
+    <div class="cli-top-header">
+      <div>
+        <span>nimki 0.1.4</span> &bull; 
+        <span class="cli-key-hint" data-cli-action="tree" style="cursor:pointer;" title="Toggle File Tree (Ctrl+N or Alt+N)">[^N / Alt+N Tree]</span> &bull;
+        <span>author: <a href="https://github.com/Anik200" target="_blank" rel="noopener noreferrer">Anik200</a></span> &bull; 
+        <span>repo: <a href="https://github.com/Anik200/nimki" target="_blank" rel="noopener noreferrer">github.com/Anik200/nimki</a></span>
+      </div>
+      <div>
+        <span class="cli-key-hint">Install:</span> 
+        <span style="color:#00f0ff; cursor:pointer;" data-cli-action="winget" title="Click to Copy Command">winget install Anik200.nimki [copy]</span>
+      </div>
+    </div>
+
+    <!-- Main Terminal Row: File Tree (Cols 0-29) + Editor Viewport (Cols 30+) -->
+    <div class="terminal-main-row">
+
+      <!-- Left File Tree Sidebar (FILE_TREE_WIDTH 30) -->
+      <div id="terminalFiletree" class="terminal-filetree"></div>
+
+      <!-- Editor Buffer Viewport -->
+      <div class="terminal-editor-viewport">
+
+        <!-- Top Right Ambient Digital Clock (editor_draw_clock()) -->
+        <div id="terminalClock" class="terminal-clock-overlay">16:20</div>
+
+        <!-- Scrollable Code & Line Numbers -->
+        <div id="terminalScrollArea" class="terminal-scroll-area" tabindex="0">
+          <div id="terminalLineNumbers" class="terminal-line-numbers"></div>
+          <div id="terminalCodeBody" class="terminal-code-body"></div>
+        </div>
+
+        <!-- Floating ncurses Context Menu (editor_draw_context_menu()) -->
+        <div id="terminalContextMenu" class="terminal-context-menu">
+          <div id="ctxCopy" class="context-row selected">
+            <span>Copy</span>
+            <span style="color:#767676;">Ctrl+K</span>
+          </div>
+          <div id="ctxSelectAll" class="context-row">
+            <span>Select All</span>
+            <span style="color:#767676;">Ctrl+A</span>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- Status Bar (Reverse-Video A_REVERSE Strip) -->
+    <div class="terminal-statusbar">
+      <div id="statusLeft" class="statusbar-left">README.txt - 42 lines</div>
+      <div id="statusCoord" class="statusbar-right">1/42</div>
+    </div>
+
+    <!-- Message Bar (Row screen_rows + 1) -->
+    <div id="terminalMsgbar" class="terminal-msgbar">
+      Welcome to Nimki! Press Ctrl+N (or Alt+N) to toggle file tree. Ctrl+T for line numbers. Ctrl+F to find. Ctrl+S to save.
+    </div>
+
+    <!-- Search Prompt (Overlay in message bar when Ctrl+F pressed) -->
+    <div id="searchPrompt" class="search-prompt">
+      <span style="color: #58a6ff;">Search (Use arrows to navigate, ESC to cancel):</span>
+      <input type="text" id="searchInput" class="search-input" autocomplete="off" spellcheck="false">
+    </div>
+
+    <!-- Bottom CLI Action Key Bar -->
+    <div class="cli-footer-keys">
+      <span class="cli-key-action" data-cli-action="tree" title="Toggle File Tree (Ctrl+N or Alt+N)"><span>^N/Alt+N</span> Tree</span>
+      <span class="cli-key-action" data-cli-action="nums" title="Toggle Line Numbers (Ctrl+T)"><span>^T</span> Nums</span>
+      <span class="cli-key-action" data-cli-action="find" title="Find Text (Ctrl+F)"><span>^F</span> Find</span>
+      <span class="cli-key-action" data-cli-action="save" title="Save File (Ctrl+S)"><span>^S</span> Save</span>
+      <span class="cli-key-action" data-cli-action="undo" title="Undo (Ctrl+Z)"><span>^Z</span> Undo</span>
+      <span class="cli-key-action" data-cli-action="quit" title="Quit (Ctrl+Q)"><span>^Q</span> Quit</span>
+      <span>|</span>
+      <span class="cli-key-action" data-cli-action="winget"><span>$</span> winget install Anik200.nimki</span>
+      <span>|</span>
+      <a href="https://github.com/Anik200/nimki" target="_blank" rel="noopener noreferrer" style="color:#00ffff; text-decoration:none;" class="cli-key-action">GitHub [source]</a>
+    </div>
+
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

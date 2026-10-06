@@ -1,0 +1,6 @@
+# Nimki Fortran Syntax
+name: Fortran
+extensions: .f .f90 .f95 .f03 .f08 .for
+comment_single: !
+keywords: program subroutine function module end if then else endif do while select case default call return use allocate deallocate contain interface public private parameter implicit none
+types: integer real character logical complex double precision intent in out inout

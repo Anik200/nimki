@@ -1,0 +1,443 @@
+/* ==========================================================================
+   NIMKI CLI TEXT EDITOR - AUTHENTIC TERMINAL INTERFACE
+   100% pure CLI ncurses aesthetics. Zero GUI fluff. Monospace cell grid.
+   ========================================================================== */
+
+:root {
+  /* Pure Terminal Color Palette */
+  --term-bg: #000000;
+  --term-fg: #FFFFFF;
+  --term-dim: #767676;
+  --term-line: #008080; /* ncurses cyan/teal for line numbers */
+  
+  /* Syntax Tokens (Default Nimki .nimkirc) */
+  --hl-normal: #FFFFFF;
+  --hl-comment: #008080;
+  --hl-keyword1: #FFFF00;
+  --hl-keyword2: #00FF00;
+  --hl-string: #FF00FF;
+  --hl-number: #FF0000;
+  --hl-match: #000000;
+  --hl-match-bg: #FFFF00;
+  --hl-preproc: #0000FF;
+  --hl-selection-bg: #FFFFFF;
+  --hl-selection-fg: #000000;
+
+  /* Strict Terminal Font */
+  --term-font: 'JetBrains Mono', 'Cascadia Code', 'Fira Code', 'Consolas', 'Courier New', monospace;
+  --char-width: 9.6px;
+  --char-height: 20px;
+  --tree-cols: 30;
+}
+
+/* Hard Terminal Reset */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  width: 100vw;
+  height: 100vh;
+  margin: 0;
+  padding: 0;
+  background-color: var(--term-bg);
+  color: var(--term-fg);
+  font-family: var(--term-font);
+  font-size: 15px;
+  line-height: var(--char-height);
+  letter-spacing: 0;
+  overflow: hidden;
+  user-select: text;
+  -webkit-font-smoothing: none;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ==========================================================================
+   Terminal Window (Full Screen ncurses Screen)
+   ========================================================================== */
+.terminal-screen {
+  width: 100vw;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background-color: var(--term-bg);
+  position: relative;
+  overflow: hidden;
+}
+
+/* Optional top CLI helper banner (styled like a terminal command prompt / banner) */
+.cli-top-header {
+  height: var(--char-height);
+  background-color: #0c0c0c;
+  color: var(--term-dim);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 8px;
+  font-size: 13px;
+  border-bottom: 1px solid #1a1a1a;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.cli-top-header a {
+  color: #00FFFF;
+  text-decoration: none;
+}
+
+.cli-top-header a:hover {
+  text-decoration: underline;
+}
+
+.cli-key-hint {
+  color: #FFFF00;
+  font-weight: bold;
+}
+
+/* ==========================================================================
+   Main Terminal Buffer (File Tree + Editor Buffer)
+   ========================================================================== */
+.terminal-main-row {
+  flex: 1;
+  display: flex;
+  position: relative;
+  overflow: hidden;
+  min-height: 0;
+}
+
+/* Sidebar File Tree (FILE_TREE_WIDTH = 30 cols) */
+.terminal-filetree {
+  width: calc(var(--tree-cols) * var(--char-width));
+  min-width: calc(var(--tree-cols) * var(--char-width));
+  max-width: calc(var(--tree-cols) * var(--char-width));
+  flex-shrink: 0;
+  height: 100%;
+  background-color: var(--term-bg);
+  border-right: 1px solid #767676; /* ACS_VLINE │ */
+  overflow-y: auto;
+  overflow-x: hidden;
+  user-select: none;
+  font-family: var(--term-font);
+  font-size: 15px;
+  line-height: var(--char-height);
+  white-space: pre;
+}
+
+.terminal-filetree.hidden {
+  display: none !important;
+  width: 0 !important;
+  min-width: 0 !important;
+  max-width: 0 !important;
+}
+
+.tree-row {
+  height: var(--char-height);
+  line-height: var(--char-height);
+  padding: 0;
+  margin: 0;
+  white-space: pre;
+  cursor: pointer;
+  color: var(--term-fg);
+}
+
+.tree-row:hover {
+  background-color: #1a1a1a;
+}
+
+/* A_REVERSE in ncurses (active selected item) */
+.tree-row.active {
+  background-color: #FFFFFF;
+  color: #000000;
+}
+
+/* ==========================================================================
+   Editor Buffer Viewport
+   ========================================================================== */
+.terminal-editor-viewport {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  overflow: hidden;
+  background-color: var(--term-bg);
+  min-width: 0;
+}
+
+/* Ambient Top Digital Clock (mvprintw(0, E.screen_cols - clock_len, "%s", time_str)) */
+.terminal-clock-overlay {
+  position: absolute;
+  top: 0;
+  right: 12px;
+  height: var(--char-height);
+  line-height: var(--char-height);
+  color: #767676;
+  font-family: var(--term-font);
+  font-size: 15px;
+  pointer-events: none;
+  user-select: none;
+  z-index: 20;
+}
+
+/* Editor Scroll Area */
+.terminal-scroll-area {
+  flex: 1;
+  display: flex;
+  overflow-y: scroll;
+  overflow-x: auto;
+  outline: none;
+  cursor: text;
+  position: relative;
+  font-family: var(--term-font);
+  font-size: 15px;
+  line-height: var(--char-height);
+  white-space: pre;
+}
+
+/* Custom terminal scrollbars (minimal dark) */
+.terminal-scroll-area::-webkit-scrollbar,
+.terminal-filetree::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.terminal-scroll-area::-webkit-scrollbar-track,
+.terminal-filetree::-webkit-scrollbar-track {
+  background: #000000;
+}
+
+.terminal-scroll-area::-webkit-scrollbar-thumb,
+.terminal-filetree::-webkit-scrollbar-thumb {
+  background: #333333;
+}
+
+/* Line Numbers Margin (mvprintw(y, x_offset, "%*d ", line_num_width - 1, filerow + 1)) */
+.terminal-line-numbers {
+  padding: 0 8px 0 4px;
+  color: var(--hl-comment);
+  text-align: right;
+  user-select: none;
+  flex-shrink: 0;
+  background-color: var(--term-bg);
+}
+
+.terminal-line-numbers.hidden {
+  display: none;
+}
+
+/* Editor Text Lines */
+.terminal-code-body {
+  flex: 1;
+  min-width: 0;
+  color: var(--hl-normal);
+  padding-right: 20px;
+}
+
+.term-line {
+  height: var(--char-height);
+  line-height: var(--char-height);
+  min-height: var(--char-height);
+  position: relative;
+  white-space: pre;
+}
+
+/* Terminal Cursor (Block Cursor) */
+.term-cursor {
+  display: inline-block;
+  background-color: #FFFFFF;
+  color: #000000;
+  min-width: var(--char-width);
+  height: var(--char-height);
+  line-height: var(--char-height);
+  animation: term-blink 1s infinite step-end;
+  vertical-align: top;
+}
+
+@keyframes term-blink {
+  0%, 100% {
+    background-color: #FFFFFF;
+    color: #000000;
+  }
+  50% {
+    background-color: transparent;
+    color: inherit;
+  }
+}
+
+/* Selection Highlight (A_REVERSE on selection) */
+.term-selected {
+  background-color: #FFFFFF;
+  color: #000000;
+}
+
+/* ==========================================================================
+   Syntax Highlighting Colors (Exact to syntax.c & config.c)
+   ========================================================================== */
+.hl-kw1 { color: var(--hl-keyword1); font-weight: bold; }
+.hl-kw2 { color: var(--hl-keyword2); font-weight: bold; }
+.hl-str { color: var(--hl-string); }
+.hl-num { color: var(--hl-number); }
+.hl-com { color: var(--hl-comment); }
+.hl-pre { color: var(--hl-preproc); font-weight: bold; }
+.hl-mat { background-color: var(--hl-match-bg); color: var(--hl-match); font-weight: bold; }
+
+/* Interactive Terminal Links / Commands */
+.term-link {
+  color: #00FFFF;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.term-cmd {
+  color: #FFFF00;
+  font-weight: bold;
+}
+
+/* ==========================================================================
+   Status Bar (attron(A_REVERSE) - Inverted Black-on-White ncurses Strip)
+   ========================================================================== */
+.terminal-statusbar {
+  height: var(--char-height);
+  line-height: var(--char-height);
+  background-color: #FFFFFF;
+  color: #000000;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 4px;
+  font-size: 15px;
+  font-weight: bold;
+  user-select: none;
+  flex-shrink: 0;
+  white-space: pre;
+}
+
+.statusbar-left {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.statusbar-right {
+  flex-shrink: 0;
+  padding-left: 10px;
+}
+
+/* ==========================================================================
+   Message Bar (Row screen_rows + 1)
+   ========================================================================== */
+.terminal-msgbar {
+  height: var(--char-height);
+  line-height: var(--char-height);
+  background-color: #000000;
+  color: #FFFFFF;
+  padding: 0 4px;
+  font-size: 15px;
+  user-select: none;
+  flex-shrink: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  border-top: 1px solid #1a1a1a;
+}
+
+/* Search Prompt Overlay in Message Bar */
+.search-prompt {
+  display: none;
+  height: var(--char-height);
+  line-height: var(--char-height);
+  background-color: #000000;
+  color: #FFFFFF;
+  padding: 0 4px;
+  align-items: center;
+  border-top: 1px solid #1a1a1a;
+}
+
+.search-prompt.active {
+  display: flex;
+}
+
+.search-input {
+  background: transparent;
+  border: none;
+  outline: none;
+  color: #FFFF00;
+  font-family: var(--term-font);
+  font-size: 15px;
+  line-height: var(--char-height);
+  flex: 1;
+  padding: 0;
+  margin-left: 4px;
+}
+
+/* ==========================================================================
+   Context Menu (Exact to ui.c editor_draw_context_menu())
+   ========================================================================== */
+.terminal-context-menu {
+  position: absolute;
+  top: 100px;
+  left: 200px;
+  background-color: #FFFFFF;
+  color: #000000;
+  border: 1px solid #000000;
+  padding: 2px 0;
+  z-index: 100;
+  display: none;
+  user-select: none;
+  min-width: 140px;
+  box-shadow: 2px 2px 0 #333333;
+}
+
+.terminal-context-menu.active {
+  display: block;
+}
+
+.context-row {
+  padding: 0 8px;
+  height: var(--char-height);
+  line-height: var(--char-height);
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+}
+
+.context-row:hover,
+.context-row.selected {
+  background-color: #000000;
+  color: #FFFFFF;
+}
+
+/* ==========================================================================
+   Quick Keyboard / Mobile Footer Bar (Pure CLI style)
+   ========================================================================== */
+.cli-footer-keys {
+  height: var(--char-height);
+  background-color: #111111;
+  color: #888888;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 6px;
+  font-size: 12.5px;
+  user-select: none;
+  flex-shrink: 0;
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
+.cli-key-action {
+  cursor: pointer;
+  padding: 0 4px;
+  color: #AAAAAA;
+}
+
+.cli-key-action:hover {
+  color: #FFFFFF;
+  background-color: #222222;
+}
+
+.cli-key-action span {
+  color: #00FFFF;
+  font-weight: bold;
+}

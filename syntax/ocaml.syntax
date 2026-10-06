@@ -1,0 +1,8 @@
+# Nimki OCaml Syntax
+name: OCaml
+extensions: .ml .mli
+comment_single:
+comment_multi_start: (*
+comment_multi_end: *)
+keywords: let in fun function match with rec type of and begin end if then else val open module struct sig include exception raise try when for to downto while do done
+types: int float char string bool unit list array option true false None Some ref

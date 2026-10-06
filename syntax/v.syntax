@@ -1,0 +1,8 @@
+# Nimki V Language Syntax
+name: V
+extensions: .v .vsh
+comment_single: //
+comment_multi_start: /*
+comment_multi_end: */
+keywords: fn mut pub if else for in return break continue match struct enum interface type import module defer unsafe go or assert
+types: int i8 i16 i64 i128 u8 u16 u32 u64 u128 f32 f64 bool string rune byte voidptr none true false

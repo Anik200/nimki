@@ -1,0 +1,8 @@
+# Nimki Solidity Syntax
+name: Solidity
+extensions: .sol
+comment_single: //
+comment_multi_start: /*
+comment_multi_end: */
+keywords: pragma contract interface library is constructor function modifier event struct enum mapping public private internal external pure view payable virtual override returns return if else for while do break continue emit require revert assert delete new using as import
+types: address bool string bytes bytes32 bytes4 int uint uint8 uint16 uint32 uint64 uint128 uint256 int8 int16 int32 int64 int128 int256 memory storage calldata true false msg block tx now

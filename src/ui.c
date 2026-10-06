@@ -1,9 +1,9 @@
-#include"common.h"
+#include "common.h"
 
 extern EditorConfig E;
 extern FileTreeState FT;
 
-char status_message[80];
+char status_message[256];
 time_t status_message_time;
 
 void editor_draw_rows();
@@ -36,97 +36,93 @@ void editor_draw_rows() {
         move(y, x_offset);
         clrtoeol();
 
-        if (filerow >= E.num_lines) {
-        } else {
-            EditorLine *line = &E.lines[filerow];
-            int current_color_pair = HL_NORMAL;
-            int display_col = 0;
+        if (filerow >= E.num_lines || !E.lines) {
+            continue;
+        }
 
-            int sel_min_cy = E.selection_start_cy;
-            int sel_min_cx = E.selection_start_cx;
-            int sel_max_cy = E.selection_end_cy;
-            int sel_max_cx = E.selection_end_cx;
+        EditorLine *line = &E.lines[filerow];
+        int current_color_pair = HL_NORMAL;
+        int display_col = 0;
 
-            if (sel_min_cy > sel_max_cy || (sel_min_cy == sel_max_cy && sel_min_cx > sel_max_cx)) {
-                int temp_cy = sel_min_cy;
-                int temp_cx = sel_min_cx;
-                sel_min_cy = sel_max_cy;
-                sel_min_cx = sel_max_cx;
-                sel_max_cy = temp_cy;
-                sel_max_cx = temp_cx;
+        int sel_min_cy = E.selection_start_cy;
+        int sel_min_cx = E.selection_start_cx;
+        int sel_max_cy = E.selection_end_cy;
+        int sel_max_cx = E.selection_end_cx;
+
+        if (sel_min_cy > sel_max_cy || (sel_min_cy == sel_max_cy && sel_min_cx > sel_max_cx)) {
+            int temp_cy = sel_min_cy;
+            int temp_cx = sel_min_cx;
+            sel_min_cy = sel_max_cy;
+            sel_min_cx = sel_max_cx;
+            sel_max_cy = temp_cy;
+            sel_max_cx = temp_cx;
+        }
+
+        if (E.show_line_numbers) {
+            attron(COLOR_PAIR(HL_COMMENT));
+            mvprintw(y, x_offset, "%*d ", line_num_width - 1, filerow + 1);
+            attroff(COLOR_PAIR(HL_COMMENT));
+        }
+
+        int text_cols = E.screen_cols - x_offset - line_num_width;
+        if (text_cols < 0) text_cols = 0;
+
+        for (int i = 0; i < (int)line->len; i++) {
+            int char_display_width = 1;
+            if (line->text[i] == '\t') {
+                char_display_width = TAB_STOP - (display_col % TAB_STOP);
             }
 
-            if (E.show_line_numbers) {
-                attron(COLOR_PAIR(HL_COMMENT));
-                mvprintw(y, x_offset, "%*d ", line_num_width - 1, filerow + 1);
-                attroff(COLOR_PAIR(HL_COMMENT));
+            if (display_col < E.col_offset) {
+                display_col += char_display_width;
+                continue;
             }
 
-            int text_cols = E.screen_cols - x_offset - line_num_width;
+            if ((display_col - E.col_offset) >= text_cols) break;
 
-            for (int i = 0; i < (int)line->len; i++) {
-                int char_display_width = 1;
-                if (line->text[i] == '\t') {
-                    char_display_width = TAB_STOP - (display_col % TAB_STOP);
-                }
-
-                if (display_col < E.col_offset) {
-                    display_col += char_display_width;
-                    continue;
-                }
-
-                if ((display_col - E.col_offset) >= text_cols) break;
-
-                bool is_selected = false;
-                if (E.selection_active) {
-                    if (filerow >= sel_min_cy && filerow <= sel_max_cy) {
-                        if (filerow == sel_min_cy && filerow == sel_max_cy) {
-                            if (i >= sel_min_cx && i < sel_max_cx) {
-                                is_selected = true;
-                            }
-                        } else if (filerow == sel_min_cy) {
-                            if (i >= sel_min_cx) {
-                                is_selected = true;
-                            }
-                        } else if (filerow == sel_max_cy) {
-                            if (i < sel_max_cx) {
-                                is_selected = true;
-                            }
-                        } else {
-                            is_selected = true;
-                        }
+            bool is_selected = false;
+            if (E.selection_active) {
+                if (filerow >= sel_min_cy && filerow <= sel_max_cy) {
+                    if (filerow == sel_min_cy && filerow == sel_max_cy) {
+                        if (i >= sel_min_cx && i < sel_max_cx) is_selected = true;
+                    } else if (filerow == sel_min_cy) {
+                        if (i >= sel_min_cx) is_selected = true;
+                    } else if (filerow == sel_max_cy) {
+                        if (i < sel_max_cx) is_selected = true;
+                    } else {
+                        is_selected = true;
                     }
                 }
+            }
 
-                if (is_selected && has_colors()) {
-                    if (HL_SELECTION != current_color_pair) {
+            if (is_selected && has_colors()) {
+                if (HL_SELECTION != current_color_pair) {
+                    attroff(COLOR_PAIR(current_color_pair));
+                    current_color_pair = HL_SELECTION;
+                    attron(COLOR_PAIR(current_color_pair));
+                }
+            } else {
+                if (E_syntax && line->hl && has_colors()) {
+                    int hl_type = line->hl[i];
+                    if (hl_type != current_color_pair) {
                         attroff(COLOR_PAIR(current_color_pair));
-                        current_color_pair = HL_SELECTION;
+                        current_color_pair = hl_type;
                         attron(COLOR_PAIR(current_color_pair));
                     }
-                } else {
-                    if (E_syntax && has_colors()) {
-                        int hl_type = line->hl[i];
-                        if (hl_type != current_color_pair) {
-                            attroff(COLOR_PAIR(current_color_pair));
-                            current_color_pair = hl_type;
-                            attron(COLOR_PAIR(current_color_pair));
-                        }
-                    }
                 }
+            }
 
-                if (line->text[i] == '\t') {
-                    for (int k = 0; k < char_display_width; k++) {
-                        mvaddch(y, x_offset + (display_col - E.col_offset) + line_num_width + k, ' ');
-                    }
-                } else {
-                    mvaddch(y, x_offset + (display_col - E.col_offset) + line_num_width, line->text[i]);
+            if (line->text[i] == '\t') {
+                for (int k = 0; k < char_display_width; k++) {
+                    mvaddch(y, x_offset + (display_col - E.col_offset) + line_num_width + k, ' ');
                 }
-                display_col += char_display_width;
+            } else {
+                mvaddch(y, x_offset + (display_col - E.col_offset) + line_num_width, line->text[i]);
             }
-            if (E_syntax && has_colors()) {
-                attroff(COLOR_PAIR(current_color_pair));
-            }
+            display_col += char_display_width;
+        }
+        if (has_colors()) {
+            attroff(COLOR_PAIR(current_color_pair));
         }
     }
 }
@@ -135,29 +131,56 @@ void editor_draw_status_bar() {
     attron(A_REVERSE);
 
     int x_offset = E.file_tree_visible ? FILE_TREE_WIDTH : 0;
+    if (E.file_tree_visible) {
+        for (int x = 0; x < FILE_TREE_WIDTH; x++) {
+            mvaddch(E.screen_rows, x, ' ');
+        }
+        mvprintw(E.screen_rows, 1, "[TREE]");
+    }
     int max_width = E.screen_cols - x_offset;
+    if (max_width < 0) max_width = 0;
 
-    mvprintw(E.screen_rows, x_offset, "%.*s - %d lines %s",
-             max_width - 15,
-             E.filename ? E.filename : "[No Name]", E.num_lines,
-             E.dirty ? "(modified)" : "");
+    const char *lang_name = (E_syntax && E_syntax->name) ? E_syntax->name : "Plain Text";
+
+    if (E.vim_enabled) {
+        const char *mode_str = (E.vim_mode == VIM_MODE_INSERT) ? "INSERT" : "NORMAL";
+        mvprintw(E.screen_rows, x_offset, " [%s] %.*s%s [%s]",
+                 mode_str,
+                 max_width > 35 ? max_width - 35 : 0,
+                 E.filename ? E.filename : "[No Name]",
+                 E.dirty ? " (modified)" : "",
+                 lang_name);
+    } else {
+        mvprintw(E.screen_rows, x_offset, " %.*s%s [%s]",
+                 max_width > 25 ? max_width - 25 : 0,
+                 E.filename ? E.filename : "[No Name]",
+                 E.dirty ? " (modified)" : "",
+                 lang_name);
+    }
 
     char rstatus[80];
-    snprintf(rstatus, sizeof(rstatus), "%d/%d", E.cy + 1, E.num_lines);
-    mvprintw(E.screen_rows, x_offset + max_width - strlen(rstatus), "%s", rstatus);
+    snprintf(rstatus, sizeof(rstatus), "%d/%d:%d", E.cy + 1, E.num_lines, E.cx + 1);
+    if ((int)strlen(rstatus) < max_width) {
+        mvprintw(E.screen_rows, x_offset + max_width - strlen(rstatus), "%s", rstatus);
+    }
 
     attroff(A_REVERSE);
 }
 
 void editor_draw_message_bar() {
     int x_offset = E.file_tree_visible ? FILE_TREE_WIDTH : 0;
+    if (E.file_tree_visible) {
+        for (int x = 0; x < FILE_TREE_WIDTH; x++) {
+            mvaddch(E.screen_rows + 1, x, ' ');
+        }
+    }
     move(E.screen_rows + 1, x_offset);
     clrtoeol();
 
-    int msglen = strlen(status_message);
+    int msglen = (int)strlen(status_message);
     int max_width = E.screen_cols - x_offset;
     if (msglen > max_width) msglen = max_width;
-    if (time(NULL) - status_message_time < 5) {
+    if (time(NULL) - status_message_time < 5 && msglen > 0) {
         mvprintw(E.screen_rows + 1, x_offset, "%.*s", msglen, status_message);
     }
 }
@@ -171,7 +194,7 @@ void editor_draw_clock() {
     info = localtime(&rawtime);
     strftime(time_str, sizeof(time_str), "%H:%M", info);
 
-    int clock_len = strlen(time_str);
+    int clock_len = (int)strlen(time_str);
     if (E.screen_cols >= clock_len) {
         mvprintw(0, E.screen_cols - clock_len, "%s", time_str);
     }
@@ -186,8 +209,16 @@ void editor_refresh_screen() {
     editor_draw_clock();
     editor_draw_context_menu();
 
-    move(E.cy - E.row_offset, get_cx_display() - E.col_offset);
-    doupdate();
+    int x_offset = E.file_tree_visible ? FILE_TREE_WIDTH : 0;
+    if (E.file_tree_visible) {
+        int cur_y = E.file_tree_cursor - E.file_tree_offset;
+        if (cur_y < 0) cur_y = 0;
+        if (cur_y >= E.screen_rows) cur_y = E.screen_rows - 1;
+        move(cur_y, 0);
+    } else {
+        move(E.cy - E.row_offset, x_offset + get_cx_display() - E.col_offset);
+    }
+    wrefresh(stdscr);
 }
 
 void editor_set_status_message(const char *fmt, ...) {
@@ -224,7 +255,7 @@ void editor_draw_context_menu() {
         start_x = E.screen_cols - (int)menu_width - 1;
     }
     if (start_y + menu_height >= E.screen_rows + 2) {
-        start_y = E.screen_rows + 2 - menu_height -1;
+        start_y = E.screen_rows + 2 - menu_height - 1;
     }
     if (start_x < 0) start_x = 0;
     if (start_y < 0) start_y = 0;

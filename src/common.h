@@ -32,11 +32,8 @@
 
 #define EDITOR_VERSION "0.1.4"
 #define TAB_STOP 4
-
 #define CTRL(k) ((k) & 0x1f)
-
 #define MAX_UNDO_STATES 20
-
 #define FILE_TREE_WIDTH 30
 
 enum EditorHighlight {
@@ -51,7 +48,13 @@ enum EditorHighlight {
     HL_SELECTION
 };
 
+typedef enum {
+    VIM_MODE_NORMAL = 0,
+    VIM_MODE_INSERT = 1
+} VimMode;
+
 typedef struct {
+    char *name;
     char **filetype_extensions;
     char **keywords1;
     char **keywords2;
@@ -84,6 +87,12 @@ typedef struct {
     char *filename;
     int dirty;
     int select_all_active;
+
+    bool vim_enabled;
+    VimMode vim_mode;
+    char *yank_buffer;
+    bool yank_is_line;
+    char pending_cmd;
 
     EditorStateSnapshot undo_history[MAX_UNDO_STATES];
     int undo_history_len;
@@ -169,5 +178,15 @@ void file_tree_open_file();
 int get_cx_display();
 void editor_scroll();
 void initialize_syntax_colors();
+void init_syntax_system();
+void cleanup_syntax_system();
+
+void editor_delete_current_line();
+void editor_yank_current_line();
+void editor_paste_yank(bool below);
+void editor_handle_vim_command();
+void editor_move_word_forward();
+void editor_move_word_backward();
+void editor_move_word_end();
 
 #endif

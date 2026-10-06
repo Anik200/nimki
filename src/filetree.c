@@ -1,4 +1,10 @@
-#include"common.h"
+#include "common.h"
+
+#ifdef _WIN32
+#ifndef strcasecmp
+#define strcasecmp _stricmp
+#endif
+#endif
 
 extern EditorConfig E;
 extern FileTreeState FT;
@@ -18,7 +24,17 @@ FileTreeNode *create_file_tree_node(const char *path, bool is_dir) {
     }
 
     const char *slash = strrchr(path, '/');
-    node->name = strdup(slash ? slash + 1 : path);
+#ifdef _WIN32
+    const char *bslash = strrchr(path, '\\');
+    if (!slash || (bslash && bslash > slash)) slash = bslash;
+#endif
+
+    if (slash && *(slash + 1) != '\0') {
+        node->name = strdup(slash + 1);
+    } else {
+        node->name = strdup(path);
+    }
+
     if (!node->name) {
         free(node->path);
         free(node);
@@ -46,46 +62,63 @@ void free_file_tree(FileTreeNode *node) {
     free(node);
 }
 
-FileTreeNode *load_directory_tree(const char *path) {
-    FileTreeNode *node = create_file_tree_node(path, true);
-    if (!node) return NULL;
-
-    struct stat st;
-    if (stat(path, &st) == -1) {
-        node->is_dir = false;
-        return node;
+static int compare_nodes(const void *a, const void *b) {
+    FileTreeNode *node_a = *(FileTreeNode **)a;
+    FileTreeNode *node_b = *(FileTreeNode **)b;
+    if (node_a->is_dir != node_b->is_dir) {
+        return node_b->is_dir - node_a->is_dir;
     }
-    node->is_dir = S_ISDIR(st.st_mode);
+    return strcasecmp(node_a->name, node_b->name);
+}
 
-    if (!node->is_dir) return node;
+void load_directory_children(FileTreeNode *node) {
+    if (!node || !node->is_dir || node->children != NULL) return;
 
-    DIR *dir = opendir(path);
-    if (!dir) return node;
+    DIR *dir = opendir(node->path);
+    if (!dir) return;
 
     struct dirent *entry;
-    node->children = NULL;
-    node->num_children = 0;
-
     while ((entry = readdir(dir)) != NULL) {
         if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
             continue;
+        if (strcmp(entry->d_name, ".git") == 0)
+            continue;
 
         char child_path[PATH_MAX];
-        snprintf(child_path, sizeof(child_path), "%s/%s", path, entry->d_name);
+#ifdef _WIN32
+        snprintf(child_path, sizeof(child_path), "%s\\%s", node->path, entry->d_name);
+#else
+        snprintf(child_path, sizeof(child_path), "%s/%s", node->path, entry->d_name);
+#endif
 
-        FileTreeNode *child = load_directory_tree(child_path);
+        struct stat st;
+        bool is_dir = false;
+        if (stat(child_path, &st) == 0) {
+            is_dir = S_ISDIR(st.st_mode);
+        }
+
+        FileTreeNode *child = create_file_tree_node(child_path, is_dir);
         if (child) {
-            node->num_children++;
-            node->children = realloc(node->children, node->num_children * sizeof(FileTreeNode *));
-            if (!node->children) {
+            FileTreeNode **new_children = realloc(node->children, (node->num_children + 1) * sizeof(FileTreeNode *));
+            if (!new_children) {
                 free_file_tree(child);
-                closedir(dir);
-                return node;
+                break;
             }
-            node->children[node->num_children - 1] = child;
+            node->children = new_children;
+            node->children[node->num_children++] = child;
         }
     }
     closedir(dir);
+
+    if (node->children && node->num_children > 1) {
+        qsort(node->children, node->num_children, sizeof(FileTreeNode *), compare_nodes);
+    }
+}
+
+FileTreeNode *load_directory_tree(const char *path) {
+    FileTreeNode *node = create_file_tree_node(path, true);
+    if (!node) return NULL;
+    load_directory_children(node);
     return node;
 }
 
@@ -122,15 +155,13 @@ int get_node_depth(FileTreeNode *node) {
     if (!node || !node->path) return 0;
 
     int depth = 0;
-    const char *path = node->path;
-    for (const char *c = path; *c; c++) {
-        if (*c == '/') depth++;
+    for (const char *c = node->path; *c; c++) {
+        if (*c == '/' || *c == '\\') depth++;
     }
     if (FT.root && FT.root->path) {
-        const char *root_path = FT.root->path;
         int root_depth = 0;
-        for (const char *c = root_path; *c; c++) {
-            if (*c == '/') root_depth++;
+        for (const char *c = FT.root->path; *c; c++) {
+            if (*c == '/' || *c == '\\') root_depth++;
         }
         depth -= root_depth;
         if (depth < 0) depth = 0;
@@ -149,31 +180,34 @@ void draw_file_tree() {
     for (int i = start; i < end; i++) {
         FileTreeNode *node = FT.flat_nodes[i];
         int y = i - start;
-        move(y, 0);
-        clrtoeol();
+
+        for (int x = 0; x < FILE_TREE_WIDTH - 1; x++) {
+            mvaddch(y, x, ' ');
+        }
 
         int indent = get_node_depth(node) * 2;
-        if (indent > 20) indent = 20;
+        if (indent > 16) indent = 16;
+
+        int prefix_len = node->is_dir ? 4 : 2;
+        int max_name_len = (FILE_TREE_WIDTH - 1) - indent - prefix_len;
+        if (max_name_len < 0) max_name_len = 0;
 
         if (node->is_dir) {
-            if (node->expanded)
-                mvprintw(y, indent, "[-] %s", node->name);
-            else
-                mvprintw(y, indent, "[+] %s", node->name);
+            mvprintw(y, indent, "[%c] %.*s", node->expanded ? '-' : '+', max_name_len, node->name);
         } else {
-            mvprintw(y, indent, " %s", node->name);
+            mvprintw(y, indent, "  %.*s", max_name_len, node->name);
         }
 
         if (i == E.file_tree_cursor) {
-            attron(A_REVERSE);
-            mvchgat(y, 0, -1, A_REVERSE, 0, NULL);
-            attroff(A_REVERSE);
+            mvchgat(y, 0, FILE_TREE_WIDTH - 1, A_REVERSE, 0, NULL);
         }
     }
 
     for (int i = end; i < max_rows; i++) {
-        move(i, 0);
-        clrtoeol();
+        int y = i - start;
+        for (int x = 0; x < FILE_TREE_WIDTH - 1; x++) {
+            mvaddch(y, x, ' ');
+        }
     }
 
     for (int y = 0; y < E.screen_rows; y++) {
@@ -187,6 +221,14 @@ void toggle_file_tree() {
         if (!FT.root) {
             char cwd[PATH_MAX];
             if (!getcwd(cwd, sizeof(cwd))) strcpy(cwd, ".");
+            size_t len = strlen(cwd);
+            while (len > 1 && (cwd[len - 1] == '/' || cwd[len - 1] == '\\')) {
+#ifdef _WIN32
+                if (len == 3 && cwd[1] == ':') break;
+#endif
+                cwd[len - 1] = '\0';
+                len--;
+            }
             FT.root = load_directory_tree(cwd);
             if (FT.root) {
                 FT.root->expanded = true;
@@ -219,10 +261,18 @@ void file_tree_toggle_expand() {
 
     FileTreeNode *node = FT.flat_nodes[E.file_tree_cursor];
     if (node->is_dir) {
-        node->expanded = !node->expanded;
+        if (!node->expanded) {
+            if (!node->children) {
+                load_directory_children(node);
+            }
+            node->expanded = true;
+        } else {
+            node->expanded = false;
+        }
         refresh_flat_file_tree();
         if (E.file_tree_cursor >= FT.flat_node_count)
             E.file_tree_cursor = FT.flat_node_count - 1;
+        editor_refresh_screen();
     }
 }
 
@@ -230,14 +280,16 @@ void file_tree_open_file() {
     if (!E.file_tree_visible || !FT.flat_nodes || E.file_tree_cursor >= FT.flat_node_count) return;
 
     FileTreeNode *node = FT.flat_nodes[E.file_tree_cursor];
-    if (!node->is_dir) {
+    if (node->is_dir) {
+        file_tree_toggle_expand();
+    } else {
         editor_read_file(node->path);
         toggle_file_tree();
     }
 }
 
 void editor_find() {
-    char *query = editor_prompt("Search (Use arrows to navigate, ESC to cancel): %s",
+    char *query = editor_prompt("Search (ESC to cancel): %s",
                                  E.search_query ? E.search_query : "");
 
     if (query == NULL) {
@@ -288,7 +340,7 @@ void editor_find_next(int direction) {
     int original_col = current_col;
 
     while (1) {
-        if (current_row < 0 || current_row >= E.num_lines) break;
+        if (current_row < 0 || current_row >= E.num_lines || !E.lines) break;
 
         EditorLine *line = &E.lines[current_row];
         char *match = NULL;
@@ -317,10 +369,10 @@ void editor_find_next(int direction) {
 
         if (match) {
             E.cy = current_row;
-            E.cx = match - line->text;
+            E.cx = (int)(match - line->text);
             E.last_match_row = E.cy;
             E.last_match_col = E.cx;
-            editor_set_status_message("Found '%s' at %d:%d", E.search_query, E.cy + 1, E.cx + 1);
+            editor_set_status_message("/%s [%d:%d]", E.search_query, E.cy + 1, E.cx + 1);
             editor_refresh_screen();
             return;
         }
@@ -330,7 +382,7 @@ void editor_find_next(int direction) {
             current_col = 0;
         } else {
             current_row--;
-            current_col = (int)E.lines[current_row].len - 1;
+            current_col = (current_row >= 0) ? (int)E.lines[current_row].len - 1 : 0;
         }
 
         if (current_row >= E.num_lines) {
@@ -345,7 +397,7 @@ void editor_find_next(int direction) {
             break;
         }
     }
-    editor_set_status_message("No more matches for '%s'", E.search_query);
+    editor_set_status_message("Pattern not found: %s", E.search_query);
     E.last_match_row = -1;
     E.last_match_col = -1;
     editor_refresh_screen();

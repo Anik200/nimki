@@ -1,5 +1,6 @@
 /nimki
 /nimki.exe
+nimki_*.exe
 *.o
 *.a
 vendor/

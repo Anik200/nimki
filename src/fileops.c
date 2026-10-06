@@ -1,4 +1,4 @@
-#include"common.h"
+#include "common.h"
 
 extern EditorConfig E;
 extern EditorSyntax *E_syntax;
@@ -29,13 +29,6 @@ static ssize_t getline(char **lineptr, size_t *n, FILE *stream) {
     return (ssize_t)pos;
 }
 #endif
-
-void editor_read_file(const char *filename);
-void editor_save_file();
-void editor_select_syntax_highlight();
-int editor_insert_newline();
-void editor_insert_char(int c);
-void editor_del_char();
 
 void editor_read_file(const char *filename) {
     if (E.filename) {
@@ -88,30 +81,39 @@ void editor_read_file(const char *filename) {
 
     if (E.lines) {
         for (int i = 0; i < E.num_lines; ++i) {
-            free(E.lines[i].text);
-            free(E.lines[i].hl);
+            if (E.lines[i].text) free(E.lines[i].text);
+            if (E.lines[i].hl) free(E.lines[i].hl);
         }
         free(E.lines);
         E.lines = NULL;
         E.num_lines = 0;
     }
 
+    int capacity = 0;
+
     while ((linelen = getline(&line_buffer, &linecap, fp)) != -1) {
         while (linelen > 0 && (line_buffer[linelen - 1] == '\n' || line_buffer[linelen - 1] == '\r')) {
             linelen--;
         }
 
-        E.lines = realloc(E.lines, (E.num_lines + 1) * sizeof(EditorLine));
-        if (E.lines == NULL) {
-            free(line_buffer);
-            cleanup_editor();
-            fprintf(stderr, "Fatal error: out of memory (realloc lines).\n");
-            exit(1);
+        if (E.num_lines >= capacity) {
+            int new_cap = capacity == 0 ? 64 : capacity * 2;
+            EditorLine *new_lines = realloc(E.lines, new_cap * sizeof(EditorLine));
+            if (!new_lines) {
+                free(line_buffer);
+                fclose(fp);
+                cleanup_editor();
+                fprintf(stderr, "Fatal error: out of memory reading file lines.\n");
+                exit(1);
+            }
+            E.lines = new_lines;
+            capacity = new_cap;
         }
 
         E.lines[E.num_lines].text = malloc(linelen + 1);
         if (E.lines[E.num_lines].text == NULL) {
             free(line_buffer);
+            fclose(fp);
             cleanup_editor();
             fprintf(stderr, "Fatal error: out of memory (line text).\n");
             exit(1);
@@ -152,21 +154,22 @@ void editor_read_file(const char *filename) {
     }
 
     E.dirty = 0;
-    editor_set_status_message("Opened file: %s (%d lines)", filename, E.num_lines);
+    E.cx = 0;
+    E.cy = 0;
+    E.row_offset = 0;
+    E.col_offset = 0;
+    editor_set_status_message("\"%s\" %dL", filename, E.num_lines);
     editor_save_state();
 }
 
 void editor_save_file() {
     if (!E.filename) {
-        char *new_filename = editor_prompt("Save as: %s (ESC to cancel)", "");
+        char *new_filename = editor_prompt("Save as: %s", "");
         if (new_filename == NULL) {
-            editor_set_status_message("Save cancelled.");
+            editor_set_status_message("Save cancelled");
             return;
         }
-        if (E.filename) {
-            free(E.filename);
-            E.filename = NULL;
-        }
+        if (E.filename) free(E.filename);
         E.filename = new_filename;
         editor_select_syntax_highlight();
     }
@@ -177,30 +180,32 @@ void editor_save_file() {
         return;
     }
 
+    bool write_err = false;
     for (int i = 0; i < E.num_lines; ++i) {
-        fprintf(fp, "%s\n", E.lines[i].text);
+        if (fprintf(fp, "%s\n", E.lines[i].text ? E.lines[i].text : "") < 0) {
+            write_err = true;
+            break;
+        }
     }
-    fclose(fp);
+    if (fclose(fp) != 0 || write_err) {
+        editor_set_status_message("Error: Failed to write all data to \"%s\"", E.filename);
+        return;
+    }
+
     E.dirty = 0;
-    editor_set_status_message("File saved: %s", E.filename);
+    editor_set_status_message("\"%s\" %dL written", E.filename, E.num_lines);
     editor_save_state();
 }
 
 int editor_insert_newline() {
     editor_save_state();
-    if (E.num_lines == 0) {
+    if (E.num_lines == 0 || !E.lines) {
         E.lines = malloc(sizeof(EditorLine));
         if (E.lines == NULL) {
-            editor_set_status_message("Error: Out of memory for initial lines array.");
+            editor_set_status_message("Error: Out of memory for lines array");
             return -1;
         }
         E.lines[0].text = strdup("");
-        if (E.lines[0].text == NULL) {
-            free(E.lines);
-            E.lines = NULL;
-            editor_set_status_message("Error: Out of memory for initial line text.");
-            return -1;
-        }
         E.lines[0].len = 0;
         E.lines[0].hl = NULL;
         E.lines[0].hl_open_comment = 0;
@@ -212,43 +217,47 @@ int editor_insert_newline() {
         return 0;
     }
 
-    E.lines = realloc(E.lines, (E.num_lines + 1) * sizeof(EditorLine));
-    if (E.lines == NULL) {
-        editor_set_status_message("Error: Out of memory for lines array (realloc).");
+    if (E.cy < 0) E.cy = 0;
+    if (E.cy >= E.num_lines) E.cy = E.num_lines - 1;
+
+    EditorLine *current = &E.lines[E.cy];
+    if (E.cx < 0) E.cx = 0;
+    if (E.cx > (int)current->len) E.cx = (int)current->len;
+
+    char *left_text = malloc(E.cx + 1);
+    char *right_text = strdup(&current->text[E.cx]);
+    if (!left_text || !right_text) {
+        if (left_text) free(left_text);
+        if (right_text) free(right_text);
+        editor_set_status_message("Error: Out of memory splitting line");
         return -1;
     }
+    memcpy(left_text, current->text, E.cx);
+    left_text[E.cx] = '\0';
 
-    memmove(&E.lines[E.cy + 1], &E.lines[E.cy], (E.num_lines - E.cy) * sizeof(EditorLine));
+    EditorLine *new_lines = realloc(E.lines, (E.num_lines + 1) * sizeof(EditorLine));
+    if (new_lines == NULL) {
+        free(left_text);
+        free(right_text);
+        editor_set_status_message("Error: Out of memory expanding lines array");
+        return -1;
+    }
+    E.lines = new_lines;
 
+    memmove(&E.lines[E.cy + 2], &E.lines[E.cy + 1], (E.num_lines - (E.cy + 1)) * sizeof(EditorLine));
+
+    free(E.lines[E.cy].text);
+    if (E.lines[E.cy].hl) free(E.lines[E.cy].hl);
+
+    E.lines[E.cy].text = left_text;
+    E.lines[E.cy].len = E.cx;
     E.lines[E.cy].hl = NULL;
     E.lines[E.cy].hl_open_comment = 0;
 
-    if (E.cx == 0) {
-        E.lines[E.cy].text = strdup("");
-        if (E.lines[E.cy].text == NULL) {
-            editor_set_status_message("Error: Out of memory for new empty line text.");
-            return -1;
-        }
-        E.lines[E.cy].len = 0;
-    } else {
-        EditorLine *current_line = &E.lines[E.cy];
-        E.lines[E.cy + 1].len = current_line->len - E.cx;
-        E.lines[E.cy + 1].text = strdup(&current_line->text[E.cx]);
-        if (E.lines[E.cy + 1].text == NULL) {
-            editor_set_status_message("Error: Out of memory for split line text.");
-            return -1;
-        }
-        E.lines[E.cy + 1].hl = NULL;
-        E.lines[E.cy + 1].hl_open_comment = 0;
-
-        current_line->text = realloc(current_line->text, E.cx + 1);
-        if (current_line->text == NULL) {
-            editor_set_status_message("Error: out of memory for truncated line.");
-            return -1;
-        }
-        current_line->text[E.cx] = '\0';
-        current_line->len = E.cx;
-    }
+    E.lines[E.cy + 1].text = right_text;
+    E.lines[E.cy + 1].len = strlen(right_text);
+    E.lines[E.cy + 1].hl = NULL;
+    E.lines[E.cy + 1].hl_open_comment = 0;
 
     E.num_lines++;
     E.cy++;
@@ -263,26 +272,22 @@ int editor_insert_newline() {
 
 void editor_insert_char(int c) {
     editor_save_state();
-    if (E.cy == E.num_lines) {
-        if (editor_insert_newline() == -1) {
-            editor_set_status_message("Error: Failed to prepare new line for character insertion.");
-            return;
-        }
-    }
-
-    if (E.lines == NULL || E.cy >= E.num_lines) {
-        editor_set_status_message("Internal error: Invalid line state for character insertion.");
-        return;
+    if (E.cy >= E.num_lines || !E.lines) {
+        if (editor_insert_newline() == -1) return;
     }
 
     EditorLine *line = &E.lines[E.cy];
-    line->text = realloc(line->text, line->len + 2);
-    if (line->text == NULL) {
-        editor_set_status_message("Error: Out of memory for line %d.", E.cy);
+    if (E.cx < 0) E.cx = 0;
+    if (E.cx > (int)line->len) E.cx = (int)line->len;
+
+    char *new_text = realloc(line->text, line->len + 2);
+    if (new_text == NULL) {
+        editor_set_status_message("Error: Out of memory inserting char");
         return;
     }
+    line->text = new_text;
     memmove(&line->text[E.cx + 1], &line->text[E.cx], line->len - E.cx + 1);
-    line->text[E.cx] = c;
+    line->text[E.cx] = (char)c;
     line->len++;
     E.cx++;
     E.dirty = 1;
@@ -296,26 +301,18 @@ void editor_del_char() {
     if (E.select_all_active) {
         if (E.lines) {
             for (int i = 0; i < E.num_lines; ++i) {
-                free(E.lines[i].text);
-                E.lines[i].text = NULL;
-                free(E.lines[i].hl);
-                E.lines[i].hl = NULL;
+                if (E.lines[i].text) free(E.lines[i].text);
+                if (E.lines[i].hl) free(E.lines[i].hl);
             }
             free(E.lines);
             E.lines = NULL;
         }
         E.lines = malloc(sizeof(EditorLine));
         if (E.lines == NULL) {
-            editor_set_status_message("Fatal error: Out of memory (clear all init).");
+            cleanup_editor();
             exit(1);
         }
         E.lines[0].text = strdup("");
-        if (E.lines[0].text == NULL) {
-            free(E.lines);
-            E.lines = NULL;
-            editor_set_status_message("Fatal error: out of memory (clear all text).");
-            exit(1);
-        }
         E.lines[0].len = 0;
         E.lines[0].hl = NULL;
         E.lines[0].hl_open_comment = 0;
@@ -325,7 +322,6 @@ void editor_del_char() {
         E.dirty = 1;
         E.select_all_active = 0;
         editor_update_syntax(0);
-        editor_set_status_message("All text deleted.");
         return;
     }
 
@@ -336,47 +332,29 @@ void editor_del_char() {
         int sel_max_cx = E.selection_end_cx;
 
         if (sel_min_cy > sel_max_cy || (sel_min_cy == sel_max_cy && sel_min_cx > sel_max_cx)) {
-            int temp_cy = sel_min_cy;
-            int temp_cx = sel_min_cx;
-            sel_min_cy = sel_max_cy;
-            sel_min_cx = sel_max_cx;
-            sel_max_cy = temp_cy;
-            sel_max_cx = temp_cx;
+            int t_y = sel_min_cy; int t_x = sel_min_cx;
+            sel_min_cy = sel_max_cy; sel_min_cx = sel_max_cx;
+            sel_max_cy = t_y; sel_max_cx = t_x;
         }
 
         if (sel_min_cy == sel_max_cy && sel_min_cx == sel_max_cx) {
             E.selection_active = false;
-            editor_set_status_message("No text selected for deletion.");
             return;
         }
 
         int target_cy = sel_min_cy;
         int target_cx = sel_min_cx;
+        int deleted_lines = sel_max_cy - sel_min_cy;
+        int new_num_lines = E.num_lines - deleted_lines;
 
-        int new_num_lines = E.num_lines - (sel_max_cy - sel_min_cy);
-        if (new_num_lines == 0) {
-            if (E.lines) {
-                for (int i = 0; i < E.num_lines; ++i) {
-                    free(E.lines[i].text);
-                    E.lines[i].text = NULL;
-                    free(E.lines[i].hl);
-                    E.lines[i].hl = NULL;
-                }
-                free(E.lines);
-                E.lines = NULL;
+        if (new_num_lines <= 0) {
+            for (int i = 0; i < E.num_lines; ++i) {
+                if (E.lines[i].text) free(E.lines[i].text);
+                if (E.lines[i].hl) free(E.lines[i].hl);
             }
+            free(E.lines);
             E.lines = malloc(sizeof(EditorLine));
-            if (E.lines == NULL) {
-                editor_set_status_message("Fatal error: out of memory (empty file init after sel del).");
-                exit(1);
-            }
             E.lines[0].text = strdup("");
-            if (E.lines[0].text == NULL) {
-                free(E.lines);
-                E.lines = NULL;
-                editor_set_status_message("Fatal error: out of memory (empty file text after sel del).");
-                exit(1);
-            }
             E.lines[0].len = 0;
             E.lines[0].hl = NULL;
             E.lines[0].hl_open_comment = 0;
@@ -384,141 +362,216 @@ void editor_del_char() {
             E.cx = 0;
             E.cy = 0;
         } else {
-            EditorLine *new_lines = malloc(new_num_lines * sizeof(EditorLine));
-            if (new_lines == NULL) {
-                editor_set_status_message("Error: Out of memory for new lines array during deletion.");
-                return;
-            }
-
-            int current_new_line_idx = 0;
-
-            for (int r = 0; r < sel_min_cy; r++) {
-                new_lines[current_new_line_idx++] = E.lines[r];
-            }
-
-            EditorLine *start_line_orig = &E.lines[sel_min_cy];
-            EditorLine *end_line_orig = &E.lines[sel_max_cy];
-
-            size_t merged_len = sel_min_cx + (end_line_orig->len - sel_max_cx);
+            EditorLine *start_line = &E.lines[sel_min_cy];
+            EditorLine *end_line = &E.lines[sel_max_cy];
+            size_t merged_len = sel_min_cx + (end_line->len - sel_max_cx);
             char *merged_text = malloc(merged_len + 1);
-            if (merged_text == NULL) {
-                editor_set_status_message("Error: Out of memory for merged text.");
-                free(new_lines);
-                return;
+            if (merged_text) {
+                memcpy(merged_text, start_line->text, sel_min_cx);
+                memcpy(merged_text + sel_min_cx, end_line->text + sel_max_cx, end_line->len - sel_max_cx);
+                merged_text[merged_len] = '\0';
+
+                for (int r = sel_min_cy; r <= sel_max_cy; r++) {
+                    if (E.lines[r].text) free(E.lines[r].text);
+                    if (E.lines[r].hl) free(E.lines[r].hl);
+                }
+
+                E.lines[sel_min_cy].text = merged_text;
+                E.lines[sel_min_cy].len = merged_len;
+                E.lines[sel_min_cy].hl = NULL;
+                E.lines[sel_min_cy].hl_open_comment = 0;
+
+                if (deleted_lines > 0) {
+                    memmove(&E.lines[sel_min_cy + 1], &E.lines[sel_max_cy + 1],
+                            (E.num_lines - sel_max_cy - 1) * sizeof(EditorLine));
+                }
+                E.num_lines = new_num_lines;
+                E.cx = target_cx;
+                E.cy = target_cy;
             }
-            memcpy(merged_text, start_line_orig->text, sel_min_cx);
-            memcpy(merged_text + sel_min_cx, end_line_orig->text + sel_max_cx, end_line_orig->len - sel_max_cx);
-            merged_text[merged_len] = '\0';
-
-            new_lines[current_new_line_idx].text = merged_text;
-            new_lines[current_new_line_idx].len = merged_len;
-            new_lines[current_new_line_idx].hl = NULL;
-            new_lines[current_new_line_idx].hl_open_comment = 0;
-            current_new_line_idx++;
-
-            for (int r = sel_max_cy + 1; r < E.num_lines; r++) {
-                new_lines[current_new_line_idx++] = E.lines[r];
-            }
-
-            for (int r = sel_min_cy; r <= sel_max_cy; r++) {
-                free(E.lines[r].text);
-                E.lines[r].text = NULL;
-                free(E.lines[r].hl);
-                E.lines[r].hl = NULL;
-            }
-
-            free(E.lines);
-            E.lines = NULL;
-
-            E.lines = new_lines;
-            E.num_lines = new_num_lines;
-            E.cx = target_cx;
-            E.cy = target_cy;
         }
 
         E.selection_active = false;
         E.dirty = 1;
-        editor_set_status_message("Selected text deleted.");
-        for (int i = target_cy; i < E.num_lines; i++) {
-            editor_update_syntax(i);
-        }
+        for (int i = target_cy; i < E.num_lines; i++) editor_update_syntax(i);
         return;
     }
 
-    if (E.cy == E.num_lines || E.num_lines == 0) return;
+    if (E.cy >= E.num_lines || E.num_lines == 0 || !E.lines) return;
     if (E.cx == 0 && E.cy == 0 && E.lines[0].len == 0) return;
 
     EditorLine *line = &E.lines[E.cy];
     if (E.cx > 0) {
         memmove(&line->text[E.cx - 1], &line->text[E.cx], line->len - E.cx + 1);
         line->len--;
-        line->text = realloc(line->text, line->len + 1);
-        if (line->text == NULL) {
-            editor_set_status_message("Error: Out of memory (del char realloc).");
-            return;
-        }
+        char *shrunk = realloc(line->text, line->len + 1);
+        if (shrunk) line->text = shrunk;
         E.cx--;
         E.dirty = 1;
         editor_update_syntax(E.cy);
     } else {
         if (E.cy > 0) {
-            EditorLine *prev_line = &E.lines[E.cy - 1];
-            prev_line->text = realloc(prev_line->text, prev_line->len + line->len + 1);
-            if (prev_line->text == NULL) {
-                editor_set_status_message("Error: Out of memory (merge line realloc).");
+            EditorLine *prev = &E.lines[E.cy - 1];
+            size_t prev_len = prev->len;
+            size_t merged_len = prev_len + line->len;
+
+            char *new_prev_text = realloc(prev->text, merged_len + 1);
+            if (!new_prev_text) {
+                editor_set_status_message("Error: Out of memory merging lines");
                 return;
             }
-            memcpy(&prev_line->text[prev_line->len], line->text, line->len);
-            prev_line->len += line->len;
-            prev_line->text[prev_line->len] = '\0';
+            prev->text = new_prev_text;
+            memcpy(&prev->text[prev_len], line->text, line->len);
+            prev->text[merged_len] = '\0';
+            prev->len = merged_len;
 
             free(line->text);
-            line->text = NULL;
-            free(line->hl);
-            line->hl = NULL;
+            if (line->hl) free(line->hl);
 
             memmove(&E.lines[E.cy], &E.lines[E.cy + 1], (E.num_lines - E.cy - 1) * sizeof(EditorLine));
             E.num_lines--;
 
-            if (E.num_lines > 0) {
-                EditorLine *new_lines_ptr = realloc(E.lines, E.num_lines * sizeof(EditorLine));
-                if (new_lines_ptr == NULL) {
-                    editor_set_status_message("Error: Out of memory shrinking lines realloc. Data might be inconsistent.");
-                } else {
-                    E.lines = new_lines_ptr;
-                }
-            } else {
-                if (E.lines) {
-                    free(E.lines);
-                    E.lines = NULL;
-                }
-                E.lines = malloc(sizeof(EditorLine));
-                if (E.lines == NULL) {
-                    editor_set_status_message("Fatal error: out of memory (empty file init after single del).");
-                    exit(1);
-                }
-                E.lines[0].text = strdup("");
-                if (E.lines[0].text == NULL) {
-                    free(E.lines);
-                    E.lines = NULL;
-                    editor_set_status_message("Fatal error: out of memory (empty file text after single del).");
-                    exit(1);
-                }
-                E.lines[0].len = 0;
-                E.lines[0].hl = NULL;
-                E.lines[0].hl_open_comment = 0;
-                E.num_lines = 1;
-                E.cx = 0;
-                E.cy = 0;
-                editor_update_syntax(0);
-                E.dirty = 1;
-                return;
-            }
-
-            E.cx = (int)prev_line->len;
+            E.cx = (int)prev_len;
             E.cy--;
             E.dirty = 1;
             editor_update_syntax(E.cy);
         }
     }
+}
+
+void editor_delete_current_line() {
+    if (E.num_lines == 0 || !E.lines) return;
+    editor_save_state();
+
+    if (E.cy < 0) E.cy = 0;
+    if (E.cy >= E.num_lines) E.cy = E.num_lines - 1;
+
+    if (E.yank_buffer) free(E.yank_buffer);
+    E.yank_buffer = strdup(E.lines[E.cy].text ? E.lines[E.cy].text : "");
+    E.yank_is_line = true;
+
+    if (E.lines[E.cy].text) free(E.lines[E.cy].text);
+    if (E.lines[E.cy].hl) free(E.lines[E.cy].hl);
+
+    memmove(&E.lines[E.cy], &E.lines[E.cy + 1], (E.num_lines - E.cy - 1) * sizeof(EditorLine));
+    E.num_lines--;
+
+    if (E.num_lines == 0) {
+        E.lines[0].text = strdup("");
+        E.lines[0].len = 0;
+        E.lines[0].hl = NULL;
+        E.lines[0].hl_open_comment = 0;
+        E.num_lines = 1;
+        E.cy = 0;
+        E.cx = 0;
+    } else {
+        if (E.cy >= E.num_lines) E.cy = E.num_lines - 1;
+        int max_cx = (int)E.lines[E.cy].len;
+        if (E.cx >= max_cx) E.cx = max_cx > 0 ? max_cx - 1 : 0;
+    }
+
+    E.dirty = 1;
+    for (int i = E.cy; i < E.num_lines; i++) editor_update_syntax(i);
+    editor_set_status_message("1 line deleted");
+    editor_refresh_screen();
+}
+
+void editor_yank_current_line() {
+    if (E.cy < 0 || E.cy >= E.num_lines || !E.lines) return;
+    if (E.yank_buffer) free(E.yank_buffer);
+    E.yank_buffer = strdup(E.lines[E.cy].text ? E.lines[E.cy].text : "");
+    E.yank_is_line = true;
+    editor_set_status_message("1 line yanked");
+}
+
+void editor_paste_yank(bool below) {
+    if (!E.yank_buffer) {
+        editor_set_status_message("Yank buffer empty");
+        return;
+    }
+    editor_save_state();
+
+    if (E.yank_is_line) {
+        int target = below ? E.cy + 1 : E.cy;
+        if (target > E.num_lines) target = E.num_lines;
+
+        EditorLine *new_lines = realloc(E.lines, (E.num_lines + 1) * sizeof(EditorLine));
+        if (!new_lines) {
+            editor_set_status_message("Out of memory pasting line");
+            return;
+        }
+        E.lines = new_lines;
+
+        memmove(&E.lines[target + 1], &E.lines[target], (E.num_lines - target) * sizeof(EditorLine));
+        char *pasted = strdup(E.yank_buffer);
+        if (!pasted) return;
+        E.lines[target].text = pasted;
+        E.lines[target].len = strlen(pasted);
+        E.lines[target].hl = NULL;
+        E.lines[target].hl_open_comment = 0;
+        E.num_lines++;
+        E.cy = target;
+        E.cx = 0;
+        E.dirty = 1;
+        for (int i = target; i < E.num_lines; i++) editor_update_syntax(i);
+        editor_set_status_message("1 line pasted");
+    } else {
+        size_t yank_len = strlen(E.yank_buffer);
+        if (yank_len > 0) {
+            if (E.cy >= E.num_lines || !E.lines) {
+                if (editor_insert_newline() == -1) return;
+            }
+            EditorLine *line = &E.lines[E.cy];
+            if (E.cx < 0) E.cx = 0;
+            if (E.cx > (int)line->len) E.cx = (int)line->len;
+            char *new_text = realloc(line->text, line->len + yank_len + 1);
+            if (new_text) {
+                line->text = new_text;
+                memmove(&line->text[E.cx + yank_len], &line->text[E.cx], line->len - E.cx + 1);
+                memcpy(&line->text[E.cx], E.yank_buffer, yank_len);
+                line->len += yank_len;
+                E.cx += (int)yank_len;
+                E.dirty = 1;
+                editor_update_syntax(E.cy);
+            }
+        }
+    }
+    editor_refresh_screen();
+}
+
+void editor_handle_vim_command() {
+    char *cmd = editor_prompt(":%s", "");
+    if (!cmd) return;
+
+    char *p = cmd;
+    while (*p && isspace((unsigned char)*p)) p++;
+
+    if (strcmp(p, "w") == 0) {
+        editor_save_file();
+    } else if (strcmp(p, "q") == 0) {
+        if (E.dirty) {
+            editor_set_status_message("No write since last change (use :q! to override)");
+        } else {
+            cleanup_editor();
+            exit(0);
+        }
+    } else if (strcmp(p, "q!") == 0) {
+        cleanup_editor();
+        exit(0);
+    } else if (strcmp(p, "wq") == 0 || strcmp(p, "x") == 0) {
+        editor_save_file();
+        cleanup_editor();
+        exit(0);
+    } else if (isdigit((unsigned char)p[0])) {
+        int line_no = atoi(p);
+        if (line_no > 0) {
+            E.cy = line_no - 1;
+            if (E.cy >= E.num_lines) E.cy = E.num_lines - 1;
+            E.cx = 0;
+        }
+    } else if (*p) {
+        editor_set_status_message("Not an editor command: :%s", p);
+    }
+    free(cmd);
+    editor_refresh_screen();
 }

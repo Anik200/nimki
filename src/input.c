@@ -1,8 +1,8 @@
-#include"common.h"
+#include "common.h"
 
 extern EditorConfig E;
 extern FileTreeState FT;
-extern char status_message[80];
+extern char status_message[256];
 extern time_t status_message_time;
 
 void editor_process_keypress();
@@ -48,7 +48,7 @@ static void screen_to_editor_coords(int screen_x, int screen_y, int *out_cy, int
         clicked_cx = 0;
     } else {
         int target_display_cx = text_screen_x + E.col_offset;
-        if (clicked_cy < E.num_lines) {
+        if (clicked_cy < E.num_lines && E.lines) {
             EditorLine *line = &E.lines[clicked_cy];
             int current_display_cx = 0;
             for (int char_idx = 0; char_idx < (int)line->len; char_idx++) {
@@ -76,23 +76,16 @@ static void screen_to_editor_coords(int screen_x, int screen_y, int *out_cy, int
 void editor_process_keypress() {
     MEVENT event;
     int c = getch();
-    bool cursor_moved = false;
-    int original_cx = E.cx;
-    int original_cy = E.cy;
 
     if (E.context_menu_active) {
         switch (c) {
             case KEY_UP:
                 E.context_menu_selected_option--;
-                if (E.context_menu_selected_option < 0) {
-                    E.context_menu_selected_option = 1;
-                }
+                if (E.context_menu_selected_option < 0) E.context_menu_selected_option = 1;
                 break;
             case KEY_DOWN:
                 E.context_menu_selected_option++;
-                if (E.context_menu_selected_option > 1) {
-                    E.context_menu_selected_option = 0;
-                }
+                if (E.context_menu_selected_option > 1) E.context_menu_selected_option = 0;
                 break;
             case '\n':
             case '\r':
@@ -109,15 +102,234 @@ void editor_process_keypress() {
                 editor_set_status_message("");
                 break;
         }
+        editor_refresh_screen();
+        return;
     }
 
-    bool current_key_is_selection_or_cursor_move = (c == CTRL('k') || c == CTRL('a') || c == KEY_MOUSE ||
-                                                     c == KEY_UP || c == KEY_DOWN ||
-                                                     c == KEY_LEFT || c == KEY_RIGHT || c == KEY_HOME ||
-                                                     c == KEY_END || c == KEY_PPAGE || c == KEY_NPAGE);
+    if (c == KEY_MOUSE) {
+        if (getmouse(&event) == OK) {
+            if (E.file_tree_visible && event.x < FILE_TREE_WIDTH - 1 && (
+#ifdef BUTTON1_PRESSED
+                (event.bstate & BUTTON1_PRESSED) ||
+#endif
+#ifdef BUTTON1_CLICKED
+                (event.bstate & BUTTON1_CLICKED) ||
+#endif
+                (event.bstate & 1) || (event.bstate & 2)
+            )) {
+                int tree_row = event.y + E.file_tree_offset;
+                if (tree_row < FT.flat_node_count) {
+                    E.file_tree_cursor = tree_row;
+                    FileTreeNode *node = FT.flat_nodes[E.file_tree_cursor];
+                    if (node->is_dir) {
+                        file_tree_toggle_expand();
+                    } else {
+                        file_tree_open_file();
+                    }
+                    editor_refresh_screen();
+                    return;
+                }
+            } else if (
+#ifdef BUTTON4_PRESSED
+                (event.bstate & BUTTON4_PRESSED)
+#else
+                0
+#endif
+#ifdef BUTTON4_CLICKED
+                || (event.bstate & BUTTON4_CLICKED)
+#endif
+            ) {
+                int scroll_amount = 3;
+                while (scroll_amount-- > 0 && E.row_offset > 0) {
+                    E.row_offset--;
+                }
+                if (E.cy >= E.row_offset + E.screen_rows) {
+                    E.cy = E.row_offset + E.screen_rows - 1;
+                }
+                if (E.cy < 0) E.cy = 0;
+                if (E.cy >= E.num_lines) E.cy = E.num_lines > 0 ? E.num_lines - 1 : 0;
+                int line_len = (E.cy < E.num_lines) ? (int)E.lines[E.cy].len : 0;
+                if (E.cx > line_len) E.cx = line_len;
+            } else if (
+#ifdef BUTTON5_PRESSED
+                (event.bstate & BUTTON5_PRESSED)
+#else
+                0
+#endif
+#ifdef BUTTON5_CLICKED
+                || (event.bstate & BUTTON5_CLICKED)
+#endif
+            ) {
+                int max_offset = E.num_lines > E.screen_rows ? E.num_lines - E.screen_rows : 0;
+                int scroll_amount = 3;
+                while (scroll_amount-- > 0 && E.row_offset < max_offset) {
+                    E.row_offset++;
+                }
+                if (E.cy < E.row_offset) {
+                    E.cy = E.row_offset;
+                }
+                if (E.cy >= E.num_lines) E.cy = E.num_lines > 0 ? E.num_lines - 1 : 0;
+                int line_len = (E.cy < E.num_lines) ? (int)E.lines[E.cy].len : 0;
+                if (E.cx > line_len) E.cx = line_len;
+            } else if (event.bstate & REPORT_MOUSE_POSITION) {
+                if (event.y >= 0 && event.y < E.screen_rows) {
+                    int drag_cy, drag_cx;
+                    screen_to_editor_coords(event.x, event.y, &drag_cy, &drag_cx);
+                    if (!E.selection_active) {
+                        E.selection_active = true;
+                        E.selection_start_cy = E.cy;
+                        E.selection_start_cx = E.cx;
+                    }
+                    E.selection_end_cy = drag_cy;
+                    E.selection_end_cx = drag_cx;
+                    E.cy = drag_cy;
+                    E.cx = drag_cx;
+                }
+            } else if (
+#ifdef BUTTON1_PRESSED
+                (event.bstate & BUTTON1_PRESSED) ||
+#endif
+#ifdef BUTTON1_CLICKED
+                (event.bstate & BUTTON1_CLICKED) ||
+#endif
+#ifdef BUTTON1_DOUBLE_CLICKED
+                (event.bstate & BUTTON1_DOUBLE_CLICKED) ||
+#endif
+#ifdef BUTTON1_RELEASED
+                (event.bstate & BUTTON1_RELEASED) ||
+#endif
+                (event.bstate & 1) || (event.bstate & 2)
+            ) {
+                if (event.y >= 0 && event.y < E.screen_rows) {
+                    screen_to_editor_coords(event.x, event.y, &E.cy, &E.cx);
+                    E.selection_active = false;
+                }
+            } else if (
+#ifdef BUTTON3_PRESSED
+                (event.bstate & BUTTON3_PRESSED) ||
+#endif
+#ifdef BUTTON3_CLICKED
+                (event.bstate & BUTTON3_CLICKED) ||
+#endif
+                (event.bstate & 4)
+            ) {
+                E.context_menu_active = true;
+                E.context_menu_x = event.x;
+                E.context_menu_y = event.y;
+                E.context_menu_selected_option = 0;
+                editor_set_status_message("");
+            }
+        }
+        editor_refresh_screen();
+        return;
+    }
 
-    if (E.selection_active && !current_key_is_selection_or_cursor_move &&
-        !(c == KEY_BACKSPACE || c == KEY_DC || c == 127)) {
+    if (E.file_tree_visible) {
+        if (E.vim_enabled) {
+            switch (c) {
+                case 'j':
+                    file_tree_move_cursor(1);
+                    editor_refresh_screen();
+                    return;
+                case 'k':
+                    file_tree_move_cursor(-1);
+                    editor_refresh_screen();
+                    return;
+                case 'h':
+                case 'l':
+                case 'o':
+                    file_tree_toggle_expand();
+                    editor_refresh_screen();
+                    return;
+                case 'q':
+                    toggle_file_tree();
+                    return;
+                case 'g':
+                    E.file_tree_cursor = 0;
+                    editor_refresh_screen();
+                    return;
+                case 'G':
+                    if (FT.flat_node_count > 0) E.file_tree_cursor = FT.flat_node_count - 1;
+                    editor_refresh_screen();
+                    return;
+            }
+        }
+        switch (c) {
+            case KEY_UP:
+                file_tree_move_cursor(-1);
+                editor_refresh_screen();
+                return;
+            case KEY_DOWN:
+                file_tree_move_cursor(1);
+                editor_refresh_screen();
+                return;
+            case KEY_LEFT:
+            case KEY_RIGHT:
+            case ' ':
+            case '\t':
+                file_tree_toggle_expand();
+                editor_refresh_screen();
+                return;
+            case '\r':
+            case '\n':
+            case KEY_ENTER:
+                file_tree_open_file();
+                editor_refresh_screen();
+                return;
+            case 27:
+            case CTRL('n'):
+                toggle_file_tree();
+                return;
+            case KEY_HOME:
+                E.file_tree_cursor = 0;
+                editor_refresh_screen();
+                return;
+            case KEY_END:
+                if (FT.flat_node_count > 0) E.file_tree_cursor = FT.flat_node_count - 1;
+                editor_refresh_screen();
+                return;
+            case KEY_PPAGE:
+                file_tree_move_cursor(-E.screen_rows);
+                editor_refresh_screen();
+                return;
+            case KEY_NPAGE:
+                file_tree_move_cursor(E.screen_rows);
+                editor_refresh_screen();
+                return;
+        }
+        return;
+    }
+
+    if (E.find_active) {
+        if (E.vim_enabled && (c == 'n' || c == 'N')) {
+        } else if (c != KEY_UP && c != KEY_DOWN && c != CTRL('f')) {
+            E.find_active = false;
+            editor_set_status_message("");
+            for (int i = 0; i < E.num_lines; i++) {
+                editor_update_syntax(i);
+            }
+            editor_refresh_screen();
+        }
+    }
+
+    if (E.find_active && (c == KEY_UP || c == KEY_DOWN)) {
+        if (c == KEY_UP) {
+            editor_find_next(-1);
+        } else if (c == KEY_DOWN) {
+            editor_find_next(1);
+        }
+        editor_refresh_screen();
+        return;
+    }
+
+    if (E.selection_active && c != CTRL('k') && c != KEY_MOUSE &&
+        c != KEY_UP && c != KEY_DOWN && c != KEY_LEFT && c != KEY_RIGHT &&
+        (!E.vim_enabled || (c != 'h' && c != 'j' && c != 'k' && c != 'l'))) {
+        if (c == KEY_BACKSPACE || c == KEY_DC || c == 127 || c == 8) {
+            editor_del_char();
+            editor_refresh_screen();
+            return;
+        }
         E.selection_active = false;
         editor_set_status_message("");
         for (int i = 0; i < E.num_lines; i++) {
@@ -126,306 +338,345 @@ void editor_process_keypress() {
         editor_refresh_screen();
     }
 
-    if (E.find_active && c != KEY_UP && c != KEY_DOWN && c != CTRL('f')) {
-        E.find_active = false;
-        editor_set_status_message("");
-        for (int i = 0; i < E.num_lines; i++) {
-            editor_update_syntax(i);
+    if (c == CTRL('q') || c == CTRL('c')) {
+        if (E.dirty) {
+            editor_set_status_message("WARNING! File has unsaved changes. Press Ctrl+Q again to force quit.");
+            editor_refresh_screen();
+            int c2 = getch();
+            if (c2 != CTRL('q') && c2 != CTRL('c')) return;
+        }
+        cleanup_editor();
+        exit(0);
+    }
+    if (c == CTRL('s')) {
+        editor_save_file();
+        return;
+    }
+    if (c == CTRL('n')) {
+        toggle_file_tree();
+        return;
+    }
+    if (c == CTRL('t')) {
+        E.show_line_numbers = !E.show_line_numbers;
+        editor_set_status_message("Line numbers %s", E.show_line_numbers ? "ON" : "OFF");
+        editor_refresh_screen();
+        return;
+    }
+    if (c == CTRL('f') || c == CTRL('w')) {
+        editor_find();
+        return;
+    }
+    if (c == CTRL('z')) {
+        editor_undo();
+        return;
+    }
+    if (c == CTRL('k')) {
+        if (!E.selection_active) {
+            E.selection_active = true;
+            E.selection_start_cy = E.cy;
+            E.selection_start_cx = E.cx;
+            E.selection_end_cy = E.cy;
+            E.selection_end_cx = E.cx;
+            editor_set_status_message("-- VISUAL -- Move cursor to select, press Ctrl+K to copy");
+        } else {
+            editor_copy_selection_to_clipboard();
         }
         editor_refresh_screen();
+        return;
+    }
+    if (c == CTRL('a')) {
+        editor_select_all();
+        return;
     }
 
-    if (E.select_all_active && c != KEY_BACKSPACE && c != 127 && c != KEY_DC) {
-        E.select_all_active = 0;
-        editor_set_status_message("");
+    if (E.vim_enabled) {
+        if (E.vim_mode == VIM_MODE_NORMAL) {
+            if (E.pending_cmd == 'd') {
+                E.pending_cmd = '\0';
+                if (c == 'd') {
+                    editor_delete_current_line();
+                } else {
+                    editor_set_status_message("");
+                    editor_refresh_screen();
+                }
+                return;
+            }
+            if (E.pending_cmd == 'y') {
+                E.pending_cmd = '\0';
+                if (c == 'y') {
+                    editor_yank_current_line();
+                } else {
+                    editor_set_status_message("");
+                    editor_refresh_screen();
+                }
+                return;
+            }
+            if (E.pending_cmd == 'g') {
+                E.pending_cmd = '\0';
+                if (c == 'g') {
+                    E.cy = 0;
+                    E.cx = 0;
+                    if (E.selection_active) {
+                        E.selection_end_cy = E.cy;
+                        E.selection_end_cx = E.cx;
+                    }
+                    editor_refresh_screen();
+                } else {
+                    editor_set_status_message("");
+                    editor_refresh_screen();
+                }
+                return;
+            }
+
+            switch (c) {
+                case 'h':
+                    editor_move_cursor(KEY_LEFT);
+                    break;
+                case 'j':
+                    editor_move_cursor(KEY_DOWN);
+                    break;
+                case 'k':
+                    editor_move_cursor(KEY_UP);
+                    break;
+                case 'l':
+                    editor_move_cursor(KEY_RIGHT);
+                    break;
+                case 'w':
+                    editor_move_word_forward();
+                    break;
+                case 'b':
+                    editor_move_word_backward();
+                    break;
+                case 'e':
+                    editor_move_word_end();
+                    break;
+                case '0':
+                    E.cx = 0;
+                    break;
+                case '$':
+                    if (E.cy < E.num_lines && E.lines) {
+                        int len = (int)E.lines[E.cy].len;
+                        E.cx = len > 0 ? len - 1 : 0;
+                    }
+                    break;
+                case '^':
+                    if (E.cy < E.num_lines && E.lines) {
+                        EditorLine *line = &E.lines[E.cy];
+                        E.cx = 0;
+                        while (E.cx < (int)line->len && isspace((unsigned char)line->text[E.cx])) {
+                            E.cx++;
+                        }
+                    }
+                    break;
+                case 'G':
+                    E.cy = E.num_lines > 0 ? E.num_lines - 1 : 0;
+                    E.cx = 0;
+                    break;
+                case 'g':
+                    E.pending_cmd = 'g';
+                    return;
+                case CTRL('d'):
+                    E.cy += E.screen_rows / 2;
+                    if (E.cy >= E.num_lines) E.cy = E.num_lines > 0 ? E.num_lines - 1 : 0;
+                    break;
+                case CTRL('u'):
+                    E.cy -= E.screen_rows / 2;
+                    if (E.cy < 0) E.cy = 0;
+                    break;
+                case 'i':
+                    E.vim_mode = VIM_MODE_INSERT;
+                    editor_set_status_message("");
+                    editor_refresh_screen();
+                    return;
+                case 'I':
+                    if (E.cy < E.num_lines && E.lines) {
+                        EditorLine *line = &E.lines[E.cy];
+                        E.cx = 0;
+                        while (E.cx < (int)line->len && isspace((unsigned char)line->text[E.cx])) {
+                            E.cx++;
+                        }
+                    }
+                    E.vim_mode = VIM_MODE_INSERT;
+                    editor_set_status_message("");
+                    editor_refresh_screen();
+                    return;
+                case 'a':
+                    if (E.cy < E.num_lines && E.lines) {
+                        int len = (int)E.lines[E.cy].len;
+                        if (E.cx < len) E.cx++;
+                    }
+                    E.vim_mode = VIM_MODE_INSERT;
+                    editor_set_status_message("");
+                    editor_refresh_screen();
+                    return;
+                case 'A':
+                    if (E.cy < E.num_lines && E.lines) {
+                        E.cx = (int)E.lines[E.cy].len;
+                    }
+                    E.vim_mode = VIM_MODE_INSERT;
+                    editor_set_status_message("");
+                    editor_refresh_screen();
+                    return;
+                case 'o':
+                    if (E.cy < E.num_lines && E.lines) {
+                        E.cx = (int)E.lines[E.cy].len;
+                    }
+                    editor_insert_newline();
+                    E.vim_mode = VIM_MODE_INSERT;
+                    editor_set_status_message("");
+                    editor_refresh_screen();
+                    return;
+                case 'O':
+                    if (E.cy < E.num_lines && E.lines) {
+                        E.cx = 0;
+                        editor_insert_newline();
+                        E.cy--;
+                    }
+                    E.vim_mode = VIM_MODE_INSERT;
+                    editor_set_status_message("");
+                    editor_refresh_screen();
+                    return;
+                case 'x':
+                    if (E.cy < E.num_lines && E.lines) {
+                        EditorLine *line = &E.lines[E.cy];
+                        if (E.cx < (int)line->len) {
+                            E.cx++;
+                            editor_del_char();
+                        }
+                    }
+                    break;
+                case 'd':
+                    E.pending_cmd = 'd';
+                    return;
+                case 'D':
+                    if (E.cy < E.num_lines && E.lines) {
+                        EditorLine *line = &E.lines[E.cy];
+                        if (E.cx < (int)line->len) {
+                            editor_save_state();
+                            if (E.yank_buffer) free(E.yank_buffer);
+                            E.yank_buffer = strdup(&line->text[E.cx]);
+                            E.yank_is_line = false;
+                            line->text[E.cx] = '\0';
+                            line->len = E.cx;
+                            E.dirty = 1;
+                            editor_update_syntax(E.cy);
+                        }
+                    }
+                    break;
+                case 'y':
+                    E.pending_cmd = 'y';
+                    return;
+                case 'p':
+                    editor_paste_yank(true);
+                    return;
+                case 'P':
+                    editor_paste_yank(false);
+                    return;
+                case 'u':
+                    editor_undo();
+                    return;
+                case '/':
+                    editor_find();
+                    return;
+                case 'n':
+                    editor_find_next(1);
+                    return;
+                case 'N':
+                    editor_find_next(-1);
+                    return;
+                case ':':
+                    editor_handle_vim_command();
+                    return;
+                case 27:
+                    if (E.selection_active) {
+                        E.selection_active = false;
+                        for (int i = 0; i < E.num_lines; i++) editor_update_syntax(i);
+                    }
+                    editor_set_status_message("");
+                    break;
+                default:
+                    break;
+            }
+
+            if (E.selection_active) {
+                E.selection_end_cy = E.cy;
+                E.selection_end_cx = E.cx;
+            }
+            editor_refresh_screen();
+            return;
+        }
+
+        if (c == 27) {
+            E.vim_mode = VIM_MODE_NORMAL;
+            if (E.cx > 0) E.cx--;
+            editor_set_status_message("");
+            editor_refresh_screen();
+            return;
+        }
     }
 
     switch (c) {
-        case CTRL('q'):
-        case CTRL('c'):
-            if (E.dirty) {
-                editor_set_status_message("WARNING! File has unsaved changes. Press Ctrl+Q/C again to force quit.");
-                editor_refresh_screen();
-                int c2 = getch();
-                if (c2 != CTRL('q') && c2 != CTRL('c')) return;
+        case 27:
+            if (E.selection_active) {
+                E.selection_active = false;
+                for (int i = 0; i < E.num_lines; i++) editor_update_syntax(i);
             }
-            cleanup_editor();
-            exit(0);
-            break;
-
-        case CTRL('s'):
-            editor_save_file();
-            break;
-
-        case CTRL('a'):
-            editor_select_all();
-            cursor_moved = true;
-            break;
-
-        case CTRL('v'):
-            editor_set_status_message("Use terminal paste (Ctrl+Shift+V or right-click)");
-            break;
-
-        case CTRL('w'):
-            editor_find();
-            break;
-
-        case CTRL('z'):
-            editor_undo();
-            break;
-
-        case CTRL('f'):
-            editor_find();
-            break;
-
-        case CTRL('k'):
-            if (!E.selection_active) {
-                E.selection_active = true;
-                E.selection_start_cy = E.cy;
-                E.selection_start_cx = E.cx;
-                E.selection_end_cy = E.cy;
-                E.selection_end_cx = E.cx;
-                editor_set_status_message("Selection mode active. Move cursor to select, press Ctrl+K to copy.");
-            } else {
-                editor_copy_selection_to_clipboard();
-            }
-            cursor_moved = true;
+            editor_set_status_message("");
             break;
 
         case KEY_BACKSPACE:
-        case KEY_DC:
         case 127:
+        case 8:
             editor_del_char();
             break;
 
-        case '\t':
-            if (E.file_tree_visible) {
-                file_tree_toggle_expand();
-                editor_refresh_screen();
-                return;
-            } else {
-                editor_insert_char('\t');
+        case KEY_DC:
+            if (E.cy < E.num_lines && E.lines) {
+                EditorLine *line = &E.lines[E.cy];
+                if (E.cx < (int)line->len) {
+                    E.cx++;
+                    editor_del_char();
+                } else if (E.cy < E.num_lines - 1) {
+                    E.cy++;
+                    E.cx = 0;
+                    editor_del_char();
+                }
             }
+            break;
+
+        case '\t':
+            editor_insert_char('\t');
             break;
 
         case '\r':
         case '\n':
-            if (E.file_tree_visible) {
-                file_tree_open_file();
-                return;
-            } else {
-                editor_insert_newline();
-            }
+        case KEY_ENTER:
+            editor_insert_newline();
             break;
 
         case KEY_HOME:
         case KEY_END:
-            if (E.file_tree_visible) {
-                editor_move_cursor(c);
-                cursor_moved = true;
-                if (E.selection_active) {
-                    E.selection_end_cy = E.cy;
-                    E.selection_end_cx = E.cx;
-                }
-            } else {
-                editor_move_cursor(c);
-                cursor_moved = true;
-                if (E.selection_active) {
-                    E.selection_end_cy = E.cy;
-                    E.selection_end_cx = E.cx;
-                }
-            }
-            break;
         case KEY_PPAGE:
         case KEY_NPAGE:
-            if (E.file_tree_visible) {
-                if (c == KEY_PPAGE) {
-                    file_tree_move_cursor(-E.screen_rows);
-                } else if (c == KEY_NPAGE) {
-                    file_tree_move_cursor(E.screen_rows);
-                }
-                editor_refresh_screen();
-                return;
-            } else {
-                editor_move_cursor(c);
-                cursor_moved = true;
-                if (E.selection_active) {
-                    E.selection_end_cy = E.cy;
-                    E.selection_end_cx = E.cx;
-                }
-            }
-            break;
         case KEY_UP:
         case KEY_DOWN:
         case KEY_LEFT:
         case KEY_RIGHT:
-            if (E.file_tree_visible) {
-                if (c == KEY_UP) {
-                    file_tree_move_cursor(-1);
-                } else if (c == KEY_DOWN) {
-                    file_tree_move_cursor(1);
-                } else if (c == KEY_LEFT || c == KEY_RIGHT) {
-                    file_tree_toggle_expand();
-                }
-                editor_refresh_screen();
-                return;
-            } else {
-                editor_move_cursor(c);
-                cursor_moved = true;
-                if (E.selection_active) {
-                    E.selection_end_cy = E.cy;
-                    E.selection_end_cx = E.cx;
-                }
+            editor_move_cursor(c);
+            if (E.selection_active) {
+                E.selection_end_cy = E.cy;
+                E.selection_end_cx = E.cx;
             }
             break;
-        case CTRL('t'):
-            E.show_line_numbers = !E.show_line_numbers;
-            editor_set_status_message("Line numbers %s", E.show_line_numbers ? "ON" : "OFF");
-            cursor_moved = true;
-            break;
 
-        case CTRL('n'):
-            toggle_file_tree();
-            editor_refresh_screen();
-            return;
-
-        case KEY_MOUSE:
-            if (getmouse(&event) == OK) {
-                if (E.file_tree_visible && event.x < FILE_TREE_WIDTH - 1 && (
-#ifdef BUTTON1_PRESSED
-                    (event.bstate & BUTTON1_PRESSED) ||
-#endif
-#ifdef BUTTON1_CLICKED
-                    (event.bstate & BUTTON1_CLICKED) ||
-#endif
-                    (event.bstate & 1) || (event.bstate & 2)
-                )) {
-                    int tree_row = event.y + E.file_tree_offset;
-                    if (tree_row < FT.flat_node_count) {
-                        E.file_tree_cursor = tree_row;
-                        FileTreeNode *node = FT.flat_nodes[E.file_tree_cursor];
-                        if (node->is_dir) {
-                            file_tree_toggle_expand();
-                        } else {
-                            file_tree_open_file();
-                        }
-                        editor_refresh_screen();
-                        return;
-                    }
-                } else if (
-#ifdef BUTTON4_PRESSED
-                    (event.bstate & BUTTON4_PRESSED)
-#else
-                    0
-#endif
-#ifdef BUTTON4_CLICKED
-                    || (event.bstate & BUTTON4_CLICKED)
-#endif
-                ) {
-                    int scroll_amount = 3;
-                    while (scroll_amount-- > 0 && E.row_offset > 0) {
-                        E.row_offset--;
-                    }
-                    if (E.cy >= E.row_offset + E.screen_rows) {
-                        E.cy = E.row_offset + E.screen_rows - 1;
-                    }
-                    if (E.cy < 0) E.cy = 0;
-                    if (E.cy >= E.num_lines) E.cy = E.num_lines > 0 ? E.num_lines - 1 : 0;
-                    int line_len = (E.cy < E.num_lines) ? (int)E.lines[E.cy].len : 0;
-                    if (E.cx > line_len) E.cx = line_len;
-                    cursor_moved = true;
-                } else if (
-#ifdef BUTTON5_PRESSED
-                    (event.bstate & BUTTON5_PRESSED)
-#else
-                    0
-#endif
-#ifdef BUTTON5_CLICKED
-                    || (event.bstate & BUTTON5_CLICKED)
-#endif
-                ) {
-                    int max_offset = E.num_lines > E.screen_rows ? E.num_lines - E.screen_rows : 0;
-                    int scroll_amount = 3;
-                    while (scroll_amount-- > 0 && E.row_offset < max_offset) {
-                        E.row_offset++;
-                    }
-                    if (E.cy < E.row_offset) {
-                        E.cy = E.row_offset;
-                    }
-                    if (E.cy >= E.num_lines) E.cy = E.num_lines > 0 ? E.num_lines - 1 : 0;
-                    int line_len = (E.cy < E.num_lines) ? (int)E.lines[E.cy].len : 0;
-                    if (E.cx > line_len) E.cx = line_len;
-                    cursor_moved = true;
-                } else if (event.bstate & REPORT_MOUSE_POSITION) {
-                    if (event.y >= 0 && event.y < E.screen_rows) {
-                        int drag_cy, drag_cx;
-                        screen_to_editor_coords(event.x, event.y, &drag_cy, &drag_cx);
-
-                        if (!E.selection_active) {
-                            E.selection_active = true;
-                            E.selection_start_cy = E.cy;
-                            E.selection_start_cx = E.cx;
-                        }
-                        E.selection_end_cy = drag_cy;
-                        E.selection_end_cx = drag_cx;
-                        E.cy = drag_cy;
-                        E.cx = drag_cx;
-                        cursor_moved = true;
-                    }
-                } else if (
-#ifdef BUTTON1_PRESSED
-                    (event.bstate & BUTTON1_PRESSED) ||
-#endif
-#ifdef BUTTON1_CLICKED
-                    (event.bstate & BUTTON1_CLICKED) ||
-#endif
-#ifdef BUTTON1_DOUBLE_CLICKED
-                    (event.bstate & BUTTON1_DOUBLE_CLICKED) ||
-#endif
-#ifdef BUTTON1_RELEASED
-                    (event.bstate & BUTTON1_RELEASED) ||
-#endif
-                    (event.bstate & 1) || (event.bstate & 2)
-                ) {
-                    if (event.y >= 0 && event.y < E.screen_rows) {
-                        screen_to_editor_coords(event.x, event.y, &E.cy, &E.cx);
-                        E.selection_active = false;
-                        cursor_moved = true;
-                    }
-                } else if (
-#ifdef BUTTON3_PRESSED
-                    (event.bstate & BUTTON3_PRESSED) ||
-#endif
-#ifdef BUTTON3_CLICKED
-                    (event.bstate & BUTTON3_CLICKED) ||
-#endif
-                    (event.bstate & 4)
-                ) {
-                    E.context_menu_active = true;
-                    E.context_menu_x = event.x;
-                    E.context_menu_y = event.y;
-                    E.context_menu_selected_option = 0;
-                    editor_set_status_message("");
-                }
-            }
-            break;
         default:
             if (c >= 32 && c <= 126) {
-                 editor_insert_char(c);
+                editor_insert_char(c);
+            } else if (c >= 128) {
+                editor_insert_char(c);
             }
             break;
     }
 
-    if (E.dirty || cursor_moved || original_cx != E.cx || original_cy != E.cy || time(NULL) - status_message_time < 5 || E.context_menu_active) {
-        editor_refresh_screen();
-    }
-}
-
-void handle_winch(int sig) {
-    (void)sig;
-    endwin();
-    refresh();
-    getmaxyx(stdscr, E.screen_rows, E.screen_cols);
-    E.screen_rows -= 2;
     editor_refresh_screen();
 }

@@ -18,7 +18,11 @@ static void copy_to_windows_clipboard(const char *text, size_t len) {
             memcpy(pGlob, text, len);
             pGlob[len] = '\0';
             GlobalUnlock(hGlob);
-            SetClipboardData(CF_TEXT, hGlob);
+            if (!SetClipboardData(CF_TEXT, hGlob)) {
+                GlobalFree(hGlob);
+            }
+        } else {
+            GlobalFree(hGlob);
         }
     }
     CloseClipboard();
@@ -100,7 +104,7 @@ static bool copy_via_command(const char *cmd, char *const argv[], const char *te
 
 void editor_copy_selection_to_clipboard() {
     if (!E.selection_active) {
-        editor_set_status_message("No text selected to copy.");
+        editor_set_status_message("No text selected to copy");
         return;
     }
 
@@ -110,17 +114,14 @@ void editor_copy_selection_to_clipboard() {
     int sel_max_cx = E.selection_end_cx;
 
     if (sel_min_cy > sel_max_cy || (sel_min_cy == sel_max_cy && sel_min_cx > sel_max_cx)) {
-        int temp_cy = sel_min_cy;
-        int temp_cx = sel_min_cx;
-        sel_min_cy = sel_max_cy;
-        sel_min_cx = sel_max_cx;
-        sel_max_cy = temp_cy;
-        sel_max_cx = temp_cx;
+        int temp_cy = sel_min_cy; int temp_cx = sel_min_cx;
+        sel_min_cy = sel_max_cy; sel_min_cx = sel_max_cx;
+        sel_max_cy = temp_cy; sel_max_cx = temp_cx;
     }
 
     size_t total_len = 0;
     for (int r = sel_min_cy; r <= sel_max_cy; r++) {
-        if (r < 0 || r >= E.num_lines) continue;
+        if (r < 0 || r >= E.num_lines || !E.lines) continue;
 
         EditorLine *line = &E.lines[r];
         int start_col = (r == sel_min_cy) ? sel_min_cx : 0;
@@ -138,20 +139,20 @@ void editor_copy_selection_to_clipboard() {
     }
 
     if (total_len == 0) {
-        editor_set_status_message("No text selected to copy.");
+        editor_set_status_message("No text selected to copy");
         return;
     }
 
     char *selected_text = malloc(total_len + 1);
     if (selected_text == NULL) {
-        editor_set_status_message("Copy error: Out of memory for selected text.");
+        editor_set_status_message("Copy error: Out of memory");
         return;
     }
     selected_text[0] = '\0';
     size_t current_offset = 0;
 
     for (int r = sel_min_cy; r <= sel_max_cy; r++) {
-        if (r < 0 || r >= E.num_lines) continue;
+        if (r < 0 || r >= E.num_lines || !E.lines) continue;
 
         EditorLine *line = &E.lines[r];
         int start_col = (r == sel_min_cy) ? sel_min_cx : 0;
@@ -210,7 +211,7 @@ void editor_copy_selection_to_clipboard() {
     }
 #endif
 
-    editor_set_status_message("Copied %zu bytes.", current_offset);
+    editor_set_status_message("Yanked %zu bytes to clipboard", current_offset);
 
     free(selected_text);
     selected_text = NULL;
@@ -222,13 +223,13 @@ void editor_copy_selection_to_clipboard() {
 }
 
 void editor_select_all() {
-    if (E.num_lines == 0) return;
+    if (E.num_lines == 0 || !E.lines) return;
     E.selection_active = true;
     E.selection_start_cy = 0;
     E.selection_start_cx = 0;
     E.selection_end_cy = E.num_lines - 1;
     E.selection_end_cx = (int)E.lines[E.num_lines - 1].len;
-    editor_set_status_message("All text selected. Press Ctrl+K to copy.");
+    editor_set_status_message("-- VISUAL -- All lines selected (Ctrl+K to copy)");
     for (int i = 0; i < E.num_lines; i++) {
         editor_update_syntax(i);
     }

@@ -1,4 +1,4 @@
-#include"common.h"
+#include "common.h"
 
 extern EditorConfig E;
 
@@ -38,7 +38,11 @@ int main(int argc, char *argv[]) {
         E.lines[0].hl_open_comment = 0;
         E.num_lines = 1;
         editor_update_syntax(0);
-        editor_set_status_message("Welcome to Nimki! Press Ctrl+Q to quit. Ctrl+S to save. Ctrl+F to find. Ctrl+K to select/copy. Ctrl+T to toggle line numbers.");
+        if (E.vim_enabled) {
+            editor_set_status_message("Nimki %s - Vim: 'i' insert, Esc normal, ':w' save, ':q' quit", EDITOR_VERSION);
+        } else {
+            editor_set_status_message("Nimki %s - Ctrl+S: Save | Ctrl+Q: Quit | Ctrl+F: Find | Ctrl+N: Files", EDITOR_VERSION);
+        }
     }
 
     editor_refresh_screen();

@@ -1,0 +1,34 @@
+# ================================================================
+# Nimki Configuration File (.nimkirc)
+# ================================================================
+
+# Theme Selection
+# Built-in themes:
+#   dracula, nord, monokai, gruvbox, tokyo-night, catppuccin,
+#   one-dark, solarized-dark, solarized-light, cyberpunk, matrix, default
+theme=dracula
+
+# Background Transparency / Terminal Background
+# Set to 'true' to ignore the theme background and use your terminal's
+# native background color (supports transparency and blur).
+# Options: true / false
+use_terminal_bg=true
+
+# Vi/Vim Navigation Controls
+# Set to 'true' to enable Vi modal navigation (Normal/Insert modes, h/j/k/l, :w, :q, etc.)
+# Options: true / false
+vi_nav=false
+
+# Custom Overrides (uncomment to customize):
+# You can use hex (#RRGGBB), named colors, or ANSI numbers (0-255, -1)
+# bg_color=#282A36
+# hl_normal=#F8F8F2
+# hl_comment=#6272A4
+# hl_keyword1=#FF79C6
+# hl_keyword2=#BD93F9
+# hl_string=#F1FA8C
+# hl_number=#FFB86C
+# hl_match=#50FA7B
+# hl_preproc=#8BE9FD
+# hl_selection=#FFFFFF
+# hl_selection_bg=#44475A

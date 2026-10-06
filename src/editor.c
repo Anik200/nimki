@@ -549,10 +549,18 @@ char *editor_prompt(const char *prompt_fmt, ...) {
             editor_set_status_message("");
             editor_refresh_screen();
             return NULL;
-        } else if (c == KEY_BACKSPACE || c == 127 || c == KEY_DC || c == 8) {
+        } else if (c == KEY_BACKSPACE || c == 127 || c == KEY_DC || c == 8
+#ifdef CTL_BKSP
+                   || c == CTL_BKSP
+#endif
+        ) {
             if (buflen > 0) {
                 buflen--;
                 buffer[buflen] = '\0';
+            } else {
+                editor_set_status_message("");
+                editor_refresh_screen();
+                return NULL;
             }
         } else if (c >= 32 && c <= 126) {
             if (buflen < sizeof(buffer) - 1) {

@@ -325,7 +325,11 @@ void editor_process_keypress() {
     if (E.selection_active && c != CTRL('k') && c != KEY_MOUSE &&
         c != KEY_UP && c != KEY_DOWN && c != KEY_LEFT && c != KEY_RIGHT &&
         (!E.vim_enabled || (c != 'h' && c != 'j' && c != 'k' && c != 'l'))) {
-        if (c == KEY_BACKSPACE || c == KEY_DC || c == 127 || c == 8) {
+        if (c == KEY_BACKSPACE || c == KEY_DC || c == 127 || c == 8
+#ifdef CTL_BKSP
+            || c == CTL_BKSP
+#endif
+        ) {
             editor_del_char();
             editor_refresh_screen();
             return;
@@ -545,6 +549,24 @@ void editor_process_keypress() {
                         }
                     }
                     break;
+                case 'X':
+                case KEY_BACKSPACE:
+                case 127:
+                case 8:
+#ifdef CTL_BKSP
+                case CTL_BKSP:
+#endif
+                    editor_del_char();
+                    break;
+                case KEY_DC:
+                    if (E.cy < E.num_lines && E.lines) {
+                        EditorLine *line = &E.lines[E.cy];
+                        if (E.cx < (int)line->len) {
+                            E.cx++;
+                            editor_del_char();
+                        }
+                    }
+                    break;
                 case 'd':
                     E.pending_cmd = 'd';
                     return;
@@ -627,6 +649,9 @@ void editor_process_keypress() {
         case KEY_BACKSPACE:
         case 127:
         case 8:
+#ifdef CTL_BKSP
+        case CTL_BKSP:
+#endif
             editor_del_char();
             break;
 

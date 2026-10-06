@@ -339,8 +339,7 @@ void editor_del_char() {
 
         if (sel_min_cy == sel_max_cy && sel_min_cx == sel_max_cx) {
             E.selection_active = false;
-            return;
-        }
+        } else {
 
         int target_cy = sel_min_cy;
         int target_cx = sel_min_cx;
@@ -391,16 +390,18 @@ void editor_del_char() {
             }
         }
 
-        E.selection_active = false;
-        E.dirty = 1;
-        for (int i = target_cy; i < E.num_lines; i++) editor_update_syntax(i);
-        return;
+            E.selection_active = false;
+            E.dirty = 1;
+            for (int i = target_cy; i < E.num_lines; i++) editor_update_syntax(i);
+            return;
+        }
     }
 
     if (E.cy >= E.num_lines || E.num_lines == 0 || !E.lines) return;
     if (E.cx == 0 && E.cy == 0 && E.lines[0].len == 0) return;
 
     EditorLine *line = &E.lines[E.cy];
+    if (E.cx > (int)line->len) E.cx = (int)line->len;
     if (E.cx > 0) {
         memmove(&line->text[E.cx - 1], &line->text[E.cx], line->len - E.cx + 1);
         line->len--;

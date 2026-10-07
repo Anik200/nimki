@@ -2,9 +2,9 @@
 #define COMMON_H
 
 #define _GNU_SOURCE
+#define NCURSES_MOUSE_VERSION 2
 
 #ifdef _WIN32
-#define NCURSES_MOUSE_VERSION 2
 #include <curses.h>
 #define getmouse(x) nc_getmouse(x)
 #include <windows.h>

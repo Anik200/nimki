@@ -73,7 +73,11 @@ void init_editor() {
     noecho();
     keypad(stdscr, TRUE);
 
+#ifdef REPORT_MOUSE_POSITION
     mousemask(ALL_MOUSE_EVENTS | REPORT_MOUSE_POSITION, NULL);
+#else
+    mousemask(ALL_MOUSE_EVENTS, NULL);
+#endif
     mouseinterval(0);
 
 #ifdef SIGWINCH

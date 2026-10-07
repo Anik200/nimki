@@ -171,7 +171,11 @@ void editor_process_keypress() {
                 if (E.cy >= E.num_lines) E.cy = E.num_lines > 0 ? E.num_lines - 1 : 0;
                 int line_len = (E.cy < E.num_lines) ? (int)E.lines[E.cy].len : 0;
                 if (E.cx > line_len) E.cx = line_len;
+#ifdef REPORT_MOUSE_POSITION
             } else if (event.bstate & REPORT_MOUSE_POSITION) {
+#else
+            } else if (0) {
+#endif
                 if (event.y >= 0 && event.y < E.screen_rows) {
                     int drag_cy, drag_cx;
                     screen_to_editor_coords(event.x, event.y, &drag_cy, &drag_cx);

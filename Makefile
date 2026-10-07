@@ -6,7 +6,7 @@ ifeq ($(OS),Windows_NT)
     LDFLAGS = $(PDCURSES_DIR)/wincon/pdcurses.a
 else
     CC ?= cc
-    CFLAGS = -Wall -Wextra -s
+    CFLAGS = -Wall -Wextra -s -Isrc
     UNAME_S := $(shell uname -s)
     IS_NIXOS := $(shell if [ -e /etc/NIXOS ]; then echo "1"; elif [ -d /nix ]; then echo "1"; else echo "0"; fi)
 
@@ -25,12 +25,14 @@ else
         endif
         INSTALL_DIR = /usr/local/bin
     else
-        ifeq ($(shell pkg-config --exists ncurses && echo 1), 1)
-            LDFLAGS = $(shell pkg-config --libs ncurses) -lm
-        else ifeq ($(shell pkg-config --exists ncursesw && echo 1), 1)
+        ifeq ($(shell pkg-config --exists ncursesw && echo 1), 1)
+            CFLAGS += $(shell pkg-config --cflags ncursesw)
             LDFLAGS = $(shell pkg-config --libs ncursesw) -lm
+        else ifeq ($(shell pkg-config --exists ncurses && echo 1), 1)
+            CFLAGS += $(shell pkg-config --cflags ncurses)
+            LDFLAGS = $(shell pkg-config --libs ncurses) -lm
         else
-            LDFLAGS = -ltinfo -lncurses -lm
+            LDFLAGS = -lncurses -lm
         endif
         INSTALL_DIR = /usr/local/bin
     endif

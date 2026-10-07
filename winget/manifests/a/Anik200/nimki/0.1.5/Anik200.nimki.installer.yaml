@@ -1,0 +1,17 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.9.0.schema.json
+
+PackageIdentifier: Anik200.nimki
+PackageVersion: 0.1.5
+InstallerType: zip
+NestedInstallerType: portable
+NestedInstallerFiles:
+  - RelativeFilePath: nimki.exe
+    PortableCommandAlias: nimki
+Commands:
+  - nimki
+Installers:
+  - Architecture: x64
+    InstallerUrl: https://github.com/Anik200/nimki/releases/download/v0.1.5/nimki-windows-x64.zip
+    InstallerSha256: 0000000000000000000000000000000000000000000000000000000000000000
+ManifestType: installer
+ManifestVersion: 1.9.0

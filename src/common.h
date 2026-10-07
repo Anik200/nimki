@@ -30,7 +30,7 @@
 #include <sys/stat.h>
 #include <limits.h>
 
-#define EDITOR_VERSION "0.1.4"
+#define EDITOR_VERSION "0.1.5"
 #define TAB_STOP 4
 #define CTRL(k) ((k) & 0x1f)
 #define MAX_UNDO_STATES 20

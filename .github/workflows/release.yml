@@ -49,7 +49,14 @@ jobs:
         run: |
           NCURSES_FLAGS="$(pkg-config --cflags --libs ncursesw 2>/dev/null || pkg-config --cflags --libs ncurses 2>/dev/null || echo '-lncurses') -lm"
           echo "Flags: $NCURSES_FLAGS"
-          gcc src/main.c src/editor.c src/ui.c src/fileops.c src/syntax.c src/input.c src/clipboard.c src/filetree.c src/config.c -o nimki -Wall -Wextra -s -Isrc $NCURSES_FLAGS
+          gcc src/main.c src/editor.c src/ui.c src/fileops.c src/syntax.c src/input.c src/clipboard.c src/filetree.c src/config.c -o nimki -Wall -Wextra -s -Isrc $NCURSES_FLAGS > build.log 2>&1 || (cat build.log; exit 1)
+
+      - name: Upload Build Log on Failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-build-log
+          path: build.log
 
       - name: Package Linux Release
         run: |

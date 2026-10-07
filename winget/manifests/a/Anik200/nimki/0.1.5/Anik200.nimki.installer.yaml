@@ -12,6 +12,6 @@ Commands:
 Installers:
   - Architecture: x64
     InstallerUrl: https://github.com/Anik200/nimki/releases/download/v0.1.5/nimki-windows-x64.zip
-    InstallerSha256: 0000000000000000000000000000000000000000000000000000000000000000
+    InstallerSha256: 829DF97296D8BE29C155C0E5C45F0698D2C05AEEFBDB12BF508513727E0E223F
 ManifestType: installer
 ManifestVersion: 1.9.0

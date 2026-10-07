@@ -49,7 +49,12 @@ jobs:
         run: |
           NCURSES_FLAGS="$(pkg-config --cflags --libs ncursesw 2>/dev/null || pkg-config --cflags --libs ncurses 2>/dev/null || echo '-lncurses') -lm"
           echo "Flags: $NCURSES_FLAGS"
-          gcc src/main.c src/editor.c src/ui.c src/fileops.c src/syntax.c src/input.c src/clipboard.c src/filetree.c src/config.c -o nimki -Wall -Wextra -s -Isrc $NCURSES_FLAGS > build.log 2>&1 || (cat build.log; exit 1)
+          if ! gcc src/main.c src/editor.c src/ui.c src/fileops.c src/syntax.c src/input.c src/clipboard.c src/filetree.c src/config.c -o nimki -Wall -Wextra -s -Isrc $NCURSES_FLAGS > build.log 2>&1; then
+            cat build.log
+            ERR=$(head -n 25 build.log | tr '\n' ' ' | tr '\r' ' ')
+            echo "::error title=Compiler Error::$ERR"
+            exit 1
+          fi
 
       - name: Upload Build Log on Failure
         if: failure()

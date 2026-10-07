@@ -46,7 +46,8 @@ jobs:
           sudo apt-get install -y libncurses-dev pkg-config
 
       - name: Build Linux Binary
-        run: make
+        run: |
+          gcc src/main.c src/editor.c src/ui.c src/fileops.c src/syntax.c src/input.c src/clipboard.c src/filetree.c src/config.c -o nimki -Wall -Wextra -s -Isrc -lncurses -lm
 
       - name: Package Linux Release
         run: |

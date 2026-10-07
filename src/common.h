@@ -12,7 +12,19 @@
 #include <io.h>
 #define mkdir(path, mode) _mkdir(path)
 #else
+#if defined(__has_include)
+#if __has_include(<ncursesw/ncurses.h>)
+#include <ncursesw/ncurses.h>
+#elif __has_include(<ncurses/ncurses.h>)
+#include <ncurses/ncurses.h>
+#elif __has_include(<ncurses.h>)
 #include <ncurses.h>
+#else
+#include <curses.h>
+#endif
+#else
+#include <ncurses.h>
+#endif
 #include <unistd.h>
 #include <sys/wait.h>
 #endif

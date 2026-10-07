@@ -276,3 +276,12 @@ void editor_draw_context_menu() {
         attroff(A_REVERSE | A_BOLD);
     }
 }
+
+void handle_winch(int sig) {
+    (void)sig;
+    endwin();
+    refresh();
+    getmaxyx(stdscr, E.screen_rows, E.screen_cols);
+    E.screen_rows -= 2;
+    editor_refresh_screen();
+}
